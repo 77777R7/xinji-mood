@@ -1,0 +1,14 @@
+2026-07-03T00:00:00+08:00 harness:start goal=extend weeklyFacts with action schema fields
+2026-07-03T00:00:00+08:00 edit:dataFoundation weeklyFacts actionLearning now derives action source/family/primaryNeed/weeklyRole/rewardStamp from actionLibrary
+2026-07-03T00:00:00+08:00 edit:server weekly prompt recognizes action schema facts in weeklyFacts
+2026-07-03T00:00:00+08:00 edit:contract_tests assertions added for weeklyFacts action schema fields
+2026-07-03T00:00:00+08:00 check:typecheck pass command="npm run typecheck"
+2026-07-03T00:00:00+08:00 check:contract pass command="npm run test:contract"
+2026-07-03T00:00:00+08:00 verdict:pass weeklyFacts action schema contract complete
+2026-07-03T00:00:00+08:00 edit:dataFoundation ActionMemoryEntry persists family/primaryNeed/weeklyReflectionRole/rewardStamp snapshots and hydrates legacy entries from actionLibrary
+2026-07-03T00:00:00+08:00 edit:aiTraceExtraction weekly action payload now includes persisted action schema snapshot fields
+2026-07-03T00:00:00+08:00 edit:contract_tests assertions added for ActionMemoryEntry write-time snapshot and legacy hydrate backfill
+2026-07-03T00:00:00+08:00 edit:docs action-system-v1 now marks direct action-memory persistence complete
+2026-07-03T00:00:00+08:00 check:typecheck pass command="npm run typecheck"
+2026-07-03T00:00:00+08:00 check:contract pass command="npm run test:contract"
+2026-07-03T00:00:00+08:00 verdict:pass ActionMemoryEntry schema snapshot persistence complete

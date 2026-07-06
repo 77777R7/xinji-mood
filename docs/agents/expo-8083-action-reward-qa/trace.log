@@ -1,0 +1,26 @@
+2026-07-04T00:00:00+08:00 harness-created
+- Created because the task has multiple dependent phases and prior Expo startup failures that should not be rediscovered.
+- Contract target: restore `http://localhost:8083/`, run Action completion flow, verify/polish reward card.
+- Live precheck: no `8083` listener and no stale Expo/export/static-server process.
+
+2026-07-04T00:59:34+08:00 narrow-import-cycle-patch
+- Removed `src/actions/actionRewardCopy.ts` type imports from `src/trace/dataFoundation.ts`.
+- Reason: `dataFoundation.ts` runtime-imports `actionRewardCopy.ts`; removing the reverse edge lowers Metro/Expo startup risk without changing reward behavior.
+- Checks: `npm run typecheck` passed; `npm run test:contract` passed.
+
+2026-07-04T01:01:47+08:00 export-timeout-after-import-patch
+- Command: `WEB_8083_EXPORT_TIMEOUT_MS=90000 EXPO_NO_DOTENV=1 EXPO_NO_TELEMETRY=1 CI=1 npm run web:8083`
+- Result: wrapper timed out while running `expo export --platform web --no-minify --max-workers 4 --output-dir tmp/web-8083`.
+- Interpretation: the reverse type import was not the root cause of the Expo/export hang.
+
+2026-07-04T01:35:38+08:00 expo-and-reward-flow-restored
+- Diagnosis: export was not failing on Expo Router. The CLI reached Metro, but local dependency reads were extremely slow. A temporary fs hook showed `node_modules/metro/src/lib/contextModuleTemplates.js` took 12650ms and many later dependency files took 600-900ms each.
+- Fix: added `metro.config.js` to disable Metro Watchman resolution (`config.resolver.useWatchman = false`) and rebuilt dependencies with `npm ci`.
+- Check: fresh `expo export --platform web --no-minify --max-workers 4 --output-dir tmp/web-8083` completed in under 12s, then later in about 7s after cache warmup.
+- Check: `node scripts/serve_existing_web_8083.mjs` serves `http://localhost:8083/`.
+- Check: `npm run check:web:8083` passed against bundle `AppEntry-b447b994980d2d758a4f504961d8865d.js`.
+- Flow bug found: completion feedback returned early when no current trace record and no saved transcript existed, so default Actions -> Complete -> feedback produced no reward card.
+- Fix: action completion now synthesizes a lightweight transcript from the visible trace extraction and falls back to confirmed body-signal labels from the current trace result.
+- Flow checks: `A little`, `Yes`, `Not today`, and `Too much` all created action memory and surfaced reward cards.
+- Visual evidence: screenshots saved to `tmp/action-reward-a-little.png`, `tmp/action-reward-too-much.png`, and `tmp/action-reward-too-much-polished.png`.
+- Polish: softened `too_much` copy to "That asked more than your body had today." and "Rora will keep the next suggestion lighter."; reduced reward body/memory text weights.
