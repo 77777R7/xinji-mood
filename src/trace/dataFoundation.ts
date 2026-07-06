@@ -29,8 +29,11 @@ export type SafetyFlagKey =
   | 'severe_distress_language'
   | 'urgent_medical_body_signal';
 export type LoopSignatureStage = 'starting_out' | 'pattern_seed' | 'repeating_loop';
-export type ActionHelpfulnessSignal = 'helped' | 'helped_a_little' | 'did_not_help' | 'too_much';
+export type ActionCompletionStatus = 'completed' | 'skipped';
+export type ActionHelpfulnessSignal = 'helped' | 'helped_a_little' | 'did_not_help';
 export type ActionEffortSignal = 'easy' | 'okay' | 'too_much';
+export type ActionSkipReason = 'not_today' | 'not_relevant' | 'no_time';
+export type ActionFeedbackSignal = ActionHelpfulnessSignal | 'too_much' | 'not_today';
 export type ActionAnswerSnapshot = Record<string, string>;
 export type ActionRecommendationMode = 'daily_action' | 'loop_action';
 export type LoopPatternRuleStatus = 'learning' | 'possible_thread' | 'possible_loop';
@@ -137,8 +140,10 @@ export type ActionMemoryEntry = {
   recommendationReason: string;
   evidenceLine: string;
   completedAt: string;
-  helpfulness: ActionHelpfulnessSignal;
-  effort: ActionEffortSignal;
+  completionStatus: ActionCompletionStatus;
+  helpfulness: ActionHelpfulnessSignal | null;
+  effort: ActionEffortSignal | null;
+  skipReason: ActionSkipReason | null;
   answers: ActionAnswerSnapshot;
   notes: string | null;
   outcomeLabel: string;
@@ -154,8 +159,8 @@ export type HelpfulnessMemory = {
   actionTitle: string;
   completions: number;
   lastCompletedAt: string;
-  outcomeCounts: Record<ActionHelpfulnessSignal, number>;
-  lastOutcome: ActionHelpfulnessSignal;
+  outcomeCounts: Record<ActionFeedbackSignal, number>;
+  lastOutcome: ActionFeedbackSignal;
   lastOutcomeLabel: string;
   bestOutcomeLabel: string;
   recommendationReason: string;
@@ -176,6 +181,7 @@ export type WeeklyActionLearningStatus =
   | 'no_action_tried'
   | 'helped'
   | 'helped_a_little'
+  | 'did_not_help'
   | 'not_today'
   | 'too_much'
   | 'mixed';
@@ -344,8 +350,13 @@ const urgentMedicalKeywords = [
 const helpfulnessOutcomeLabels: Record<ActionHelpfulnessSignal, string> = {
   helped: 'Helped',
   helped_a_little: 'Helped a little',
-  did_not_help: 'Not today',
+  did_not_help: "Didn't help",
+};
+
+const actionFeedbackOutcomeLabels: Record<ActionFeedbackSignal, string> = {
+  ...helpfulnessOutcomeLabels,
   too_much: 'Too much',
+  not_today: 'Not today',
 };
 
 function makeId(prefix: string, timestamp: string) {
@@ -1085,34 +1096,72 @@ export function hydrateMoodTraceRecord(record: MoodTraceRecord): MoodTraceRecord
 
 export function hydrateActionMemoryEntry(entry: ActionMemoryEntry): ActionMemoryEntry {
   const actionSchemaSnapshot = getActionSchemaSnapshot(entry.actionId);
+  const legacyHelpfulness = (entry as unknown as { helpfulness?: ActionFeedbackSignal }).helpfulness;
+  const completionStatus =
+    entry.completionStatus || (legacyHelpfulness === 'not_today' ? 'skipped' : 'completed');
+  const helpfulness =
+    legacyHelpfulness === 'too_much' || legacyHelpfulness === 'not_today'
+      ? null
+      : entry.helpfulness || legacyHelpfulness || null;
+  const effort = entry.effort || (legacyHelpfulness === 'too_much' ? 'too_much' : deriveActionEffort(helpfulness));
+  const skipReason = entry.skipReason || (completionStatus === 'skipped' ? 'not_today' : null);
+  const hydratedEntry = {
+    ...entry,
+    completionStatus,
+    helpfulness,
+    effort: completionStatus === 'skipped' ? null : effort,
+    skipReason,
+  };
 
   return {
-    ...entry,
-    family: entry.family || actionSchemaSnapshot.family,
-    primaryNeed: entry.primaryNeed || actionSchemaSnapshot.primaryNeed,
-    weeklyReflectionRole: entry.weeklyReflectionRole || actionSchemaSnapshot.weeklyReflectionRole,
-    rewardStamp: entry.rewardStamp || actionSchemaSnapshot.rewardStamp,
-    recommendationMode: entry.recommendationMode || 'loop_action',
-    recommendationSource: entry.recommendationSource || 'fallback',
-    recommendationReason: entry.recommendationReason || entry.outcomeLabel || 'Saved before recommendation details were tracked.',
-    evidenceLine: entry.evidenceLine || 'Saved before evidence details were tracked.',
+    ...hydratedEntry,
+    family: hydratedEntry.family || actionSchemaSnapshot.family,
+    primaryNeed: hydratedEntry.primaryNeed || actionSchemaSnapshot.primaryNeed,
+    weeklyReflectionRole: hydratedEntry.weeklyReflectionRole || actionSchemaSnapshot.weeklyReflectionRole,
+    rewardStamp: hydratedEntry.rewardStamp || actionSchemaSnapshot.rewardStamp,
+    recommendationMode: hydratedEntry.recommendationMode || 'loop_action',
+    recommendationSource: hydratedEntry.recommendationSource || 'fallback',
+    recommendationReason:
+      hydratedEntry.recommendationReason ||
+      hydratedEntry.outcomeLabel ||
+      'Saved before recommendation details were tracked.',
+    evidenceLine: hydratedEntry.evidenceLine || 'Saved before evidence details were tracked.',
+    outcomeLabel: hydratedEntry.outcomeLabel || getActionFeedbackOutcomeLabel(getActionFeedbackSignal(hydratedEntry)),
   };
 }
 
-export function deriveActionEffort(helpfulness: ActionHelpfulnessSignal): ActionEffortSignal {
-  if (helpfulness === 'too_much') {
-    return 'too_much';
-  }
-
+export function deriveActionEffort(helpfulness: ActionHelpfulnessSignal | null): ActionEffortSignal | null {
   if (helpfulness === 'helped') {
     return 'easy';
   }
 
-  return 'okay';
+  if (helpfulness === 'helped_a_little' || helpfulness === 'did_not_help') {
+    return 'okay';
+  }
+
+  return null;
 }
 
 export function getHelpfulnessOutcomeLabel(helpfulness: ActionHelpfulnessSignal) {
   return helpfulnessOutcomeLabels[helpfulness];
+}
+
+export function getActionFeedbackSignal(
+  entry: Pick<ActionMemoryEntry, 'completionStatus' | 'helpfulness' | 'effort' | 'skipReason'>,
+): ActionFeedbackSignal {
+  if (entry.completionStatus === 'skipped' || entry.skipReason) {
+    return 'not_today';
+  }
+
+  if (entry.effort === 'too_much') {
+    return 'too_much';
+  }
+
+  return entry.helpfulness || 'did_not_help';
+}
+
+export function getActionFeedbackOutcomeLabel(feedback: ActionFeedbackSignal) {
+  return actionFeedbackOutcomeLabels[feedback];
 }
 
 export function createActionMemoryEntry({
@@ -1123,7 +1172,10 @@ export function createActionMemoryEntry({
   recommendationSource = 'fallback',
   recommendationReason,
   evidenceLine,
+  completionStatus = 'completed',
   helpfulness,
+  effort,
+  skipReason = null,
   answers,
   completedAt = new Date().toISOString(),
   notes = null,
@@ -1135,12 +1187,25 @@ export function createActionMemoryEntry({
   recommendationSource?: string;
   recommendationReason: string;
   evidenceLine: string;
-  helpfulness: ActionHelpfulnessSignal;
+  completionStatus?: ActionCompletionStatus;
+  helpfulness?: ActionHelpfulnessSignal | null;
+  effort?: ActionEffortSignal | null;
+  skipReason?: ActionSkipReason | null;
   answers: ActionAnswerSnapshot;
   completedAt?: string;
   notes?: string | null;
 }): ActionMemoryEntry {
   const actionSchemaSnapshot = getActionSchemaSnapshot(actionId);
+  const resolvedHelpfulness = completionStatus === 'skipped' ? null : helpfulness || null;
+  const resolvedEffort =
+    completionStatus === 'skipped' ? null : effort || deriveActionEffort(resolvedHelpfulness);
+  const resolvedSkipReason = completionStatus === 'skipped' ? skipReason || 'not_today' : null;
+  const feedbackSignal = getActionFeedbackSignal({
+    completionStatus,
+    helpfulness: resolvedHelpfulness,
+    effort: resolvedEffort,
+    skipReason: resolvedSkipReason,
+  });
 
   return {
     schemaVersion: MOOD_DATA_SCHEMA_VERSION,
@@ -1159,16 +1224,18 @@ export function createActionMemoryEntry({
     recommendationReason,
     evidenceLine,
     completedAt,
-    helpfulness,
-    effort: deriveActionEffort(helpfulness),
+    completionStatus,
+    helpfulness: resolvedHelpfulness,
+    effort: resolvedEffort,
+    skipReason: resolvedSkipReason,
     answers,
     notes,
-    outcomeLabel: helpfulnessOutcomeLabels[helpfulness],
+    outcomeLabel: actionFeedbackOutcomeLabels[feedbackSignal],
     safetyLevel: traceRecord.safetyAssessment.level,
   };
 }
 
-function getBestOutcomeLabel(outcomeCounts: Record<ActionHelpfulnessSignal, number>) {
+function getBestOutcomeLabel(outcomeCounts: Record<ActionFeedbackSignal, number>) {
   if (outcomeCounts.helped > 0) {
     return helpfulnessOutcomeLabels.helped;
   }
@@ -1179,6 +1246,10 @@ function getBestOutcomeLabel(outcomeCounts: Record<ActionHelpfulnessSignal, numb
 
   if (outcomeCounts.too_much > 0) {
     return 'Try a lighter version';
+  }
+
+  if (outcomeCounts.not_today > 0) {
+    return actionFeedbackOutcomeLabels.not_today;
   }
 
   return helpfulnessOutcomeLabels.did_not_help;
@@ -1197,18 +1268,21 @@ export function buildHelpfulnessMemory(entries: ActionMemoryEntry[]): Helpfulnes
       right.completedAt.localeCompare(left.completedAt),
     );
     const latestEntry = sortedEntries[0];
-    const outcomeCounts: Record<ActionHelpfulnessSignal, number> = {
+    const outcomeCounts: Record<ActionFeedbackSignal, number> = {
       helped: 0,
       helped_a_little: 0,
       did_not_help: 0,
       too_much: 0,
+      not_today: 0,
     };
 
     groupEntries.forEach((entry) => {
-      outcomeCounts[entry.helpfulness] += 1;
+      outcomeCounts[getActionFeedbackSignal(entry)] += 1;
     });
 
     const bestOutcomeLabel = getBestOutcomeLabel(outcomeCounts);
+    const completedEntries = groupEntries.filter((entry) => entry.completionStatus === 'completed');
+    const latestOutcome = getActionFeedbackSignal(latestEntry);
 
     return {
       schemaVersion: MOOD_DATA_SCHEMA_VERSION,
@@ -1217,16 +1291,18 @@ export function buildHelpfulnessMemory(entries: ActionMemoryEntry[]): Helpfulnes
       chainKey: latestEntry.chainKey,
       actionId: latestEntry.actionId,
       actionTitle: latestEntry.actionTitle,
-      completions: groupEntries.length,
+      completions: completedEntries.length,
       lastCompletedAt: latestEntry.completedAt,
       outcomeCounts,
-      lastOutcome: latestEntry.helpfulness,
+      lastOutcome: latestOutcome,
       lastOutcomeLabel: latestEntry.outcomeLabel,
       bestOutcomeLabel,
       recommendationReason:
-        groupEntries.length === 1
+        completedEntries.length === 0
+          ? `Rora remembered that ${latestEntry.actionTitle} was skipped when this loop showed up.`
+          : completedEntries.length === 1
           ? `Rora remembered that ${latestEntry.actionTitle} ${latestEntry.outcomeLabel.toLowerCase()} last time this loop showed up.`
-          : `Rora has seen ${latestEntry.actionTitle} help this loop ${groupEntries.length} times. Best signal: ${bestOutcomeLabel.toLowerCase()}.`,
+          : `Rora has seen ${latestEntry.actionTitle} help this loop ${completedEntries.length} times. Best signal: ${bestOutcomeLabel.toLowerCase()}.`,
     };
   });
 }
@@ -1370,14 +1446,15 @@ function getWeeklyActionLearning(actionEntries: ActionMemoryEntry[]) {
   const outcomeCounts = sortedEntries.reduce(
     (counts, entry) => ({
       ...counts,
-      [entry.helpfulness]: counts[entry.helpfulness] + 1,
+      [getActionFeedbackSignal(entry)]: counts[getActionFeedbackSignal(entry)] + 1,
     }),
     {
       helped: 0,
       helped_a_little: 0,
       did_not_help: 0,
       too_much: 0,
-    } as Record<ActionHelpfulnessSignal, number>,
+      not_today: 0,
+    } as Record<ActionFeedbackSignal, number>,
   );
   const nonZeroOutcomeCount = Object.values(outcomeCounts).filter((count) => count > 0).length;
   const status: WeeklyActionLearningStatus =
@@ -1391,10 +1468,14 @@ function getWeeklyActionLearning(actionEntries: ActionMemoryEntry[]) {
             ? 'helped_a_little'
             : outcomeCounts.too_much > 0
               ? 'too_much'
-              : 'not_today';
+              : outcomeCounts.not_today > 0
+                ? 'not_today'
+                : 'did_not_help';
   const bestEntry =
     sortedEntries.find((entry) => entry.helpfulness === 'helped') ||
     sortedEntries.find((entry) => entry.helpfulness === 'helped_a_little') ||
+    sortedEntries.find((entry) => entry.effort === 'too_much') ||
+    sortedEntries.find((entry) => entry.completionStatus === 'completed') ||
     sortedEntries[0] ||
     null;
   const bestEntrySchemaSnapshot = getActionSchemaSnapshot(bestEntry?.actionId);
@@ -1509,6 +1590,9 @@ export function buildWeeklyReflectionFacts({
   const weeklyActionMemory = actionMemoryEntries.filter((entry) =>
     isLocalDayInWindow(new Date(entry.completedAt), weekStartKey, weekEndKey),
   );
+  const completedWeeklyActionMemory = weeklyActionMemory.filter(
+    (entry) => entry.completionStatus === 'completed',
+  );
   const loopSignatures = buildLoopSignaturesFromTraces(weeklyTraceRecords);
   const primaryLoop = loopSignatures[0] || null;
   const primaryThreadRecords = primaryLoop
@@ -1539,7 +1623,7 @@ export function buildWeeklyReflectionFacts({
     sourceTraceIds: weeklyTraceRecords.map((record) => record.id),
     sourceActionMemoryIds: weeklyActionMemory.map((entry) => entry.id),
     traceCount: primaryLoop?.occurrenceCount || weeklyTraceRecords.length,
-    completedActionCount: weeklyActionMemory.length,
+    completedActionCount: completedWeeklyActionMemory.length,
     actionNoteCount: weeklyActionMemory.length,
     patternRule,
     insightMode,

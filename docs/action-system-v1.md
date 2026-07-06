@@ -80,20 +80,33 @@ Its effective rules are:
   - overthinking/worry -> `fact-guess-worry-split`
   - otherwise -> `fact-guess-worry-split`
 
-### Existing Helpfulness Rules
+### Existing Action Feedback Rules
 
-Runtime helpfulness values are:
+Runtime completion status values are:
+
+- `completed`
+- `skipped`
+
+Runtime helpfulness values only describe whether a completed action helped:
 
 - `helped`
 - `helped_a_little`
 - `did_not_help`
+
+Runtime effort values describe burden:
+
+- `easy`
+- `okay`
 - `too_much`
 
-Runtime effort is derived from helpfulness:
+Runtime skip reasons describe why an action was not tried:
 
-- `helped` -> `easy`
-- `too_much` -> `too_much`
-- all other outcomes -> `okay`
+- `not_today`
+- `not_relevant`
+- `no_time`
+
+Important: `not_today` is not `did_not_help`. It means the moment did not fit;
+it should not punish the action in recommendation memory.
 
 Helpfulness memory currently ranks actions by:
 
@@ -214,7 +227,7 @@ export type ActionDefinitionV1 = {
   };
   avoidWhen: {
     safetyLevels: string[];
-    recentHelpfulness: ActionHelpfulnessSignal[];
+    recentHelpfulness: ActionFeedbackSignal[];
     contraindicationSignalKeys: string[];
   };
   steps: ActionStepDefinitionV1[];
@@ -302,10 +315,12 @@ export type ActionRecommendationV1 = {
 export type ActionHelpfulnessSignal =
   | 'helped'
   | 'helped_a_little'
-  | 'did_not_help'
-  | 'too_much';
+  | 'did_not_help';
 
+export type ActionCompletionStatus = 'completed' | 'skipped';
 export type ActionEffortSignal = 'easy' | 'okay' | 'too_much';
+export type ActionSkipReason = 'not_today' | 'not_relevant' | 'no_time';
+export type ActionFeedbackSignal = ActionHelpfulnessSignal | 'too_much' | 'not_today';
 
 export type ActionCompletionV1 = {
   schemaVersion: 'action_completion_v1';
@@ -317,8 +332,10 @@ export type ActionCompletionV1 = {
   actionId: ActionId;
   actionTitle: string;
   completedAt: string;
-  helpfulness: ActionHelpfulnessSignal;
-  effort: ActionEffortSignal;
+  completionStatus: ActionCompletionStatus;
+  helpfulness: ActionHelpfulnessSignal | null;
+  effort: ActionEffortSignal | null;
+  skipReason: ActionSkipReason | null;
   answers: Record<string, string>;
   notes: string | null;
   rewardStamp: ActionRewardStamp;
@@ -375,8 +392,8 @@ export type HelpfulnessMemoryV1 = {
   primaryNeed: ActionPrimaryNeed;
   completions: number;
   lastCompletedAt: string;
-  outcomeCounts: Record<ActionHelpfulnessSignal, number>;
-  lastOutcome: ActionHelpfulnessSignal;
+  outcomeCounts: Record<ActionFeedbackSignal, number>;
+  lastOutcome: ActionFeedbackSignal;
   lastOutcomeLabel: string;
   bestOutcomeLabel: string;
   recommendationReason: string;
@@ -442,6 +459,7 @@ Use these weights for ranking:
 - `helped_a_little`: 1
 - `did_not_help`: 0
 - `too_much`: -2 for the same action in the same chain
+- `not_today`: 0 and do not treat it as failed
 
 If the latest same-chain action was `too_much`:
 
@@ -538,7 +556,7 @@ Every playful element must answer:
 - Which action produced it?
 - Which completion outcome produced it?
 - Does Weekly Reflection know how to interpret it?
-- Does it remain safe when helpfulness is `too_much`?
+- Does it remain safe when effort is `too_much`?
 
 ## Implementation Plan
 

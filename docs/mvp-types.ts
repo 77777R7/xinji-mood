@@ -27,9 +27,13 @@ export type PatternFeedbackRating = 'feels_right' | 'not_quite' | 'wrong';
 
 export type MicroActionStatus = 'offered' | 'started' | 'completed' | 'skipped';
 
-export type MicroActionHelpfulness = 'helped' | 'helped_a_little' | 'did_not_help' | 'unsure';
+export type MicroActionCompletionStatus = 'completed' | 'skipped';
+
+export type MicroActionHelpfulness = 'helped' | 'helped_a_little' | 'did_not_help';
 
 export type MicroActionEffort = 'easy' | 'okay' | 'too_much';
+
+export type MicroActionSkipReason = 'not_today' | 'not_relevant' | 'no_time';
 
 export type IntensityLevel = 'light' | 'medium' | 'strong';
 
@@ -227,8 +231,10 @@ export interface MicroActionCompletion extends Versioned {
   recommendationId: string;
   actionId: string;
   completedAt: string;
-  helpfulness: MicroActionHelpfulness;
-  effort: MicroActionEffort;
+  completionStatus: MicroActionCompletionStatus;
+  helpfulness: MicroActionHelpfulness | null;
+  effort: MicroActionEffort | null;
+  skipReason: MicroActionSkipReason | null;
   notes: string | null;
 }
 

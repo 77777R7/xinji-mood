@@ -4,10 +4,14 @@ import type {
 } from './actionLibrary';
 
 type ActionRewardHelpfulnessSignal = 'helped' | 'helped_a_little' | 'did_not_help' | 'too_much';
+type ActionRewardCompletionStatus = 'completed' | 'skipped';
+type ActionRewardEffortSignal = 'easy' | 'okay' | 'too_much';
+type ActionRewardSkipReason = 'not_today' | 'not_relevant' | 'no_time';
 type ActionRewardLearningStatus =
   | 'no_action_tried'
   | 'helped'
   | 'helped_a_little'
+  | 'did_not_help'
   | 'not_today'
   | 'too_much'
   | 'mixed';
@@ -56,62 +60,62 @@ export type WeeklyActionInsightContext = {
 export const rewardStampCopy: Record<ActionRewardStamp, RewardStampCopy> = {
   softened: {
     badge: 'Softened',
-    helpedHeadline: 'That cue felt a little easier to hold.',
-    helpedALittleHeadline: 'A small softening is worth remembering.',
-    didNotHelpHeadline: 'This may not be the right body step yet.',
+    helpedHeadline: 'You tried a body-first step.',
+    helpedALittleHeadline: 'You noticed a small body signal.',
+    didNotHelpHeadline: 'Rora learned this body step may not fit.',
     tooMuchHeadline: 'That asked more than your body had today.',
-    positiveBody: 'Rora can remember this as a gentle body-first helper.',
-    didNotHelpBody: 'Rora learned to keep watching for a better fit.',
+    positiveBody: 'Rora will remember the attempt, not expect a perfect result.',
+    didNotHelpBody: 'This is useful feedback, not a failed attempt.',
     tooMuchBody: 'Rora can start with just naming the cue next time.',
   },
   sorted: {
     badge: 'Sorted',
-    helpedHeadline: 'The thought got a little more sorted.',
-    helpedALittleHeadline: 'Some of the thought became easier to separate.',
-    didNotHelpHeadline: 'Sorting may not fit this moment yet.',
+    helpedHeadline: 'You tried separating the pieces.',
+    helpedALittleHeadline: 'You noticed what was possible to sort.',
+    didNotHelpHeadline: 'Rora learned sorting may not fit this moment.',
     tooMuchHeadline: 'Sorting asked too much of this thread today.',
-    positiveBody: 'Rora can remember that separating the pieces helped.',
-    didNotHelpBody: 'Rora learned this thread may need a different entry point.',
+    positiveBody: 'Rora can remember that this was worth trying for this thread.',
+    didNotHelpBody: 'This helps future suggestions start from a different entry point.',
     tooMuchBody: 'Rora can keep the next step smaller and less mental.',
   },
   named_it: {
     badge: 'Named',
-    helpedHeadline: 'The loop has a name now.',
-    helpedALittleHeadline: 'Naming it made the pattern a little easier to see.',
-    didNotHelpHeadline: 'This name may not fit yet.',
+    helpedHeadline: 'You gave the loop a name.',
+    helpedALittleHeadline: 'You noticed enough to name a piece of it.',
+    didNotHelpHeadline: 'Rora learned this name may not fit yet.',
     tooMuchHeadline: 'Naming even this much was enough for today.',
-    positiveBody: 'Rora can remember this label as a way back into the pattern.',
-    didNotHelpBody: 'Rora learned to leave room for a better name later.',
+    positiveBody: 'Rora can keep the label lightly, as a way back into the pattern.',
+    didNotHelpBody: 'Leaving room for a better name is still useful data.',
     tooMuchBody: 'Rora can keep this as a tiny noticing step, not a task.',
   },
   noticed: {
     badge: 'Noticed',
-    helpedHeadline: 'The next step became small enough to notice.',
-    helpedALittleHeadline: 'A tiny next step started to appear.',
-    didNotHelpHeadline: 'This next step may still be too far away.',
+    helpedHeadline: 'You tried one tiny step.',
+    helpedALittleHeadline: 'You noticed what a tiny step felt like.',
+    didNotHelpHeadline: 'Rora learned this step may be too far away.',
     tooMuchHeadline: 'Even a tiny step felt like too much today.',
-    positiveBody: 'Rora can remember that shrinking the move helped.',
-    didNotHelpBody: 'Rora learned this thread may need more room before action.',
+    positiveBody: 'Rora can remember the attempt without turning it into pressure.',
+    didNotHelpBody: 'This thread may need more room before action.',
     tooMuchBody: 'Rora can move back to noticing before asking for action.',
   },
   parked: {
     badge: 'Parked',
-    helpedHeadline: 'The thought found somewhere to wait.',
-    helpedALittleHeadline: 'Part of the thought felt a little more parked.',
-    didNotHelpHeadline: 'Parking it may not be enough tonight.',
+    helpedHeadline: 'You tried giving the thought a place to wait.',
+    helpedALittleHeadline: 'You noticed what could be parked for now.',
+    didNotHelpHeadline: 'Rora learned parking it may not be enough tonight.',
     tooMuchHeadline: 'Parking the thought asked too much today.',
-    positiveBody: 'Rora can remember this as an evening release helper.',
-    didNotHelpBody: 'Rora learned this thread may need another kind of support.',
+    positiveBody: 'Rora can remember this as an option, not a requirement.',
+    didNotHelpBody: 'This helps Rora look for another kind of support.',
     tooMuchBody: 'Rora can keep evening steps shorter next time.',
   },
   kind_shift: {
     badge: 'Kinder',
-    helpedHeadline: 'The self-talk got a little kinder.',
-    helpedALittleHeadline: 'A softer sentence showed up.',
-    didNotHelpHeadline: 'A kinder sentence may not feel reachable yet.',
+    helpedHeadline: 'You tried a kinder sentence.',
+    helpedALittleHeadline: 'You noticed what kindness could reach today.',
+    didNotHelpHeadline: 'Rora learned kindness may not feel reachable yet.',
     tooMuchHeadline: 'Reframing asked too much today.',
-    positiveBody: 'Rora can remember this gentler line as useful evidence.',
-    didNotHelpBody: 'Rora learned not to force kindness before it feels honest.',
+    positiveBody: 'Rora can remember this gently, without forcing it next time.',
+    didNotHelpBody: 'This is useful feedback about what feels honest.',
     tooMuchBody: 'Rora can start by naming what showed up, without reframing it.',
   },
 };
@@ -168,19 +172,34 @@ function getFallbackWeeklyRoleCopy(): WeeklyRoleCopy {
 
 export function getActionRewardCompletionCopy({
   rewardStamp,
+  completionStatus = 'completed',
   helpfulness,
+  effort,
+  skipReason,
 }: {
   rewardStamp: ActionRewardStamp | null;
-  helpfulness: ActionRewardHelpfulnessSignal;
+  completionStatus?: ActionRewardCompletionStatus;
+  helpfulness?: ActionRewardHelpfulnessSignal | null;
+  effort?: ActionRewardEffortSignal | null;
+  skipReason?: ActionRewardSkipReason | null;
 }): ActionRewardCompletionCopy {
   const copy = rewardStamp ? rewardStampCopy[rewardStamp] : getFallbackRewardStampCopy();
+
+  if (completionStatus === 'skipped' || skipReason) {
+    return {
+      badge: 'Saved gently',
+      headline: 'Not today is useful feedback.',
+      body: 'Rora learned this moment needed less demand, not more effort.',
+      memoryLine: 'This helps future suggestions stay gentler.',
+    };
+  }
 
   if (helpfulness === 'helped') {
     return {
       badge: copy.badge,
       headline: copy.helpedHeadline,
       body: copy.positiveBody,
-      memoryLine: 'Rora will remember this as a helpful action note.',
+      memoryLine: 'This helps Rora learn what can fit.',
     };
   }
 
@@ -189,11 +208,11 @@ export function getActionRewardCompletionCopy({
       badge: copy.badge,
       headline: copy.helpedALittleHeadline,
       body: copy.positiveBody,
-      memoryLine: 'Rora will remember this small shift.',
+      memoryLine: 'Small feedback is enough for Rora to learn from.',
     };
   }
 
-  if (helpfulness === 'too_much') {
+  if (effort === 'too_much' || helpfulness === 'too_much') {
     return {
       badge: 'Lighter next time',
       headline: copy.tooMuchHeadline,
@@ -206,7 +225,7 @@ export function getActionRewardCompletionCopy({
     badge: 'Still learning',
     headline: copy.didNotHelpHeadline,
     body: copy.didNotHelpBody,
-    memoryLine: 'Rora will keep looking for a better fit.',
+    memoryLine: 'This helps future recommendations get more precise.',
   };
 }
 
@@ -220,7 +239,7 @@ export function getWeeklyActionInsightCopy(context: WeeklyActionInsightContext):
     };
   }
 
-  if (context.status === 'not_today' || context.status === 'mixed') {
+  if (context.status === 'not_today' || context.status === 'did_not_help' || context.status === 'mixed') {
     return {
       headline: 'Rora is still learning what fits.',
       summary: `${context.threadText}, and Rora is still learning which action feels light enough.`,

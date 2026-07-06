@@ -538,7 +538,10 @@ function toWeeklyActionPayload(entry: ActionMemoryEntry) {
     recommendationMode: entry.recommendationMode,
     recommendationSource: entry.recommendationSource,
     chainKey: entry.chainKey,
+    completionStatus: entry.completionStatus,
     helpfulness: entry.helpfulness,
+    effort: entry.effort,
+    skipReason: entry.skipReason,
     outcomeLabel: entry.outcomeLabel,
     evidenceLine: entry.evidenceLine,
   };

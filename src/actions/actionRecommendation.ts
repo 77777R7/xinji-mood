@@ -4,8 +4,9 @@ import type {
   MoodTraceRecord,
   SafetyLevel,
   TraceActionRoutingFeatures,
+  ActionFeedbackSignal,
 } from '../trace/dataFoundation';
-import { getTraceIconPlainLabel } from '../trace/dataFoundation';
+import { getActionFeedbackSignal, getTraceIconPlainLabel } from '../trace/dataFoundation';
 import {
   actionDefinitions,
   fallbackActionId,
@@ -31,7 +32,7 @@ type ActionRecommendationContext = {
 type ActionEligibilityContext = {
   stage: ActionStageFit;
   safetyLevel: SafetyLevel;
-  recentHelpfulness?: ActionMemoryEntry['helpfulness'] | null;
+  recentHelpfulness?: ActionFeedbackSignal | null;
 };
 
 const burdenRank: Record<ActionBurdenLevel, number> = {
@@ -124,7 +125,7 @@ function pickActionFromRoutingFeatures({
   routingFeatures: TraceActionRoutingFeatures | null;
   stage: ActionStageFit;
   safetyLevel: SafetyLevel;
-  recentHelpfulness?: ActionMemoryEntry['helpfulness'] | null;
+  recentHelpfulness?: ActionFeedbackSignal | null;
   allowedPrimaryNeeds?: ActionPrimaryNeed[];
 }) {
   if (!routingFeatures) {
@@ -195,7 +196,7 @@ function pickActionByNeed({
   primaryNeed: ActionPrimaryNeed;
   stage: ActionStageFit;
   safetyLevel: SafetyLevel;
-  recentHelpfulness?: ActionMemoryEntry['helpfulness'] | null;
+  recentHelpfulness?: ActionFeedbackSignal | null;
   fallbackId: ActionId;
 }) {
   return (
@@ -213,7 +214,7 @@ function pickLightestAction({
 }: {
   stage: ActionStageFit;
   safetyLevel: SafetyLevel;
-  recentHelpfulness?: ActionMemoryEntry['helpfulness'] | null;
+  recentHelpfulness?: ActionFeedbackSignal | null;
   fallbackId: ActionId;
 }) {
   return getEligibleActions({ stage, safetyLevel, recentHelpfulness })[0]?.id || fallbackId;
@@ -228,7 +229,7 @@ function getTooMuchFallbackActionId(latestEntry: ActionMemoryEntry, safetyLevel:
         primaryNeed: getActionDefinition(fallbackForAction).primaryNeed,
         stage: 'lighter_step_after_too_much',
         safetyLevel,
-        recentHelpfulness: latestEntry.helpfulness,
+        recentHelpfulness: getActionFeedbackSignal(latestEntry),
         fallbackId: fallbackForAction,
       });
     }
@@ -237,7 +238,7 @@ function getTooMuchFallbackActionId(latestEntry: ActionMemoryEntry, safetyLevel:
   return pickLightestAction({
     stage: 'lighter_step_after_too_much',
     safetyLevel,
-    recentHelpfulness: latestEntry.helpfulness,
+    recentHelpfulness: getActionFeedbackSignal(latestEntry),
     fallbackId: 'name-loop',
   });
 }
@@ -365,7 +366,7 @@ export function getRuleBasedRecommendedAction({
 
   const latestEntry = getLatestActionMemoryForLoop(actionMemoryEntries, chainKey);
 
-  if (latestEntry?.helpfulness === 'too_much') {
+  if (latestEntry?.effort === 'too_much') {
     return {
       actionId: getTooMuchFallbackActionId(latestEntry, safetyLevel),
       reason: `Last time, ${latestEntry.actionTitle} felt like too much. Rora is choosing a lighter naming step for this loop.`,

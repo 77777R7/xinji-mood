@@ -365,7 +365,8 @@ Rules:
 
 ### MicroActionCompletion
 
-Captures whether the recommended action actually helped.
+Captures whether the recommended action was completed, skipped, and whether it
+helped. Completion, helpfulness, effort, and skip reason are separate signals.
 
 Required fields:
 
@@ -373,15 +374,20 @@ Required fields:
 - `recommendationId`
 - `actionId`
 - `completedAt`
-- `helpfulness`: `helped | helped_a_little | did_not_help | unsure`
-- `effort`: `easy | okay | too_much`
+- `completionStatus`: `completed | skipped`
+- `helpfulness`: `helped | helped_a_little | did_not_help | null`
+- `effort`: `easy | okay | too_much | null`
+- `skipReason`: `not_today | not_relevant | no_time | null`
 - `notes`
 
 Rules:
 
+- `Not today` maps to `completionStatus: skipped` and
+  `skipReason: not_today`; it is not `did_not_help`.
 - Weekly Report should use `helpfulness` to highlight which actions worked.
 - Future recommendations should prefer actions that helped and avoid actions
-  repeatedly marked `too_much` or `did_not_help`.
+  repeatedly marked `too_much` or `did_not_help`, while treating skips as
+  scheduling/context feedback rather than failure.
 
 ### PatternChainStats
 

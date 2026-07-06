@@ -28,20 +28,24 @@ action completed
 
 ## Helpfulness Branches
 
-| helpfulness | Tone | Product Meaning |
+| feedback | Tone | Product Meaning |
 | --- | --- | --- |
 | `helped` | confident and warm | This action is worth remembering. |
 | `helped_a_little` | gentle and precise | A small shift is still useful evidence. |
 | `did_not_help` | neutral and non-failing | Rora learned this may not fit this thread. |
 | `too_much` | protective and lighter | Rora should lower the burden next time. |
+| `not_today` | protective and non-punitive | The moment did not fit; do not punish the action. |
 
 ## UX Rules
 
 - Never make the reward feel like a grade.
 - Never imply the user solved the loop.
 - Never reward volume over awareness.
-- Always preserve the helpfulness nuance.
+- Always preserve the feedback nuance.
+- Never treat `not_today` as `did_not_help`.
 - If an action is `too_much`, the next recommendation should become lighter.
+- Reward noticing, trying, and giving feedback. Do not imply the user's mood had
+  to improve for the action to count.
 
 ## V1 Surface
 
@@ -50,8 +54,9 @@ V1 can ship with a small completion card:
 - stamp badge from `rewardStamp`;
 - one-sentence headline;
 - one-sentence body;
-- small "Rora will remember this" line when helpfulness is positive;
-- lighter fallback line when helpfulness is `too_much`.
+- small "Rora learned from this" line when feedback is positive;
+- lighter fallback line when effort is `too_much`.
+- gentle skip line when completion status is `skipped`.
 
 The visual treatment should match `docs/design-system.md`: paper, soft cards,
 sage/clay/amber accents, and hand-journal warmth.

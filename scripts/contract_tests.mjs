@@ -36,6 +36,7 @@ const {
   buildWeeklyReflectionPreview,
   createActionMemoryEntry,
   getConfirmedBodySignalLabels,
+  getActionFeedbackSignal,
   getLoopIdentityKey,
   getLoopPatternRuleState,
   getWeeklyInsightMode,
@@ -150,7 +151,9 @@ actionDefinitions.forEach((action) => {
   ['helped', 'helped_a_little', 'did_not_help', 'too_much'].forEach((helpfulness) => {
     const completionCopy = getActionRewardCompletionCopy({
       rewardStamp: action.completion.rewardStamp,
-      helpfulness,
+      completionStatus: 'completed',
+      helpfulness: helpfulness === 'too_much' ? null : helpfulness,
+      effort: helpfulness === 'too_much' ? 'too_much' : helpfulness === 'helped' ? 'easy' : 'okay',
     });
     assert.ok(completionCopy.badge, `${action.id} ${helpfulness} should have a reward badge`);
     assert.ok(completionCopy.headline, `${action.id} ${helpfulness} should have a reward headline`);
@@ -192,8 +195,13 @@ actionDefinitions.forEach((action) => {
 const dataFoundationSource = readFileSync(require.resolve('../src/trace/dataFoundation.ts'), 'utf8');
 assert.match(
   dataFoundationSource,
-  /ActionHelpfulnessSignal = 'helped' \| 'helped_a_little' \| 'did_not_help' \| 'too_much'/,
-  'runtime helpfulness contract should use too_much instead of legacy unsure',
+  /ActionHelpfulnessSignal = 'helped' \| 'helped_a_little' \| 'did_not_help'/,
+  'runtime helpfulness should describe whether the completed action helped',
+);
+assert.match(
+  dataFoundationSource,
+  /ActionFeedbackSignal = ActionHelpfulnessSignal \| 'too_much' \| 'not_today'/,
+  'runtime feedback contract should keep too_much and not_today outside helpfulness',
 );
 
 const lowServerSafety = {
@@ -460,7 +468,9 @@ const actionMemoryEntry = createActionMemoryEntry({
   recommendationSource: 'daily_body_signal',
   recommendationReason: 'Head pressure showed up today. Keep this focused on the body first.',
   evidenceLine: 'For today: head pressure showed up in this trace.',
+  completionStatus: 'completed',
   helpfulness: 'helped_a_little',
+  effort: 'okay',
   answers: { notice: 'Head pressure softened a bit.' },
   completedAt: '2026-06-19T09:10:00.000Z',
 });
@@ -474,6 +484,11 @@ assert.equal(actionMemoryEntry.family, 'physiological');
 assert.equal(actionMemoryEntry.primaryNeed, 'downshift_body');
 assert.equal(actionMemoryEntry.weeklyReflectionRole, 'early_cue_practice');
 assert.equal(actionMemoryEntry.rewardStamp, 'softened');
+assert.equal(actionMemoryEntry.completionStatus, 'completed');
+assert.equal(actionMemoryEntry.helpfulness, 'helped_a_little');
+assert.equal(actionMemoryEntry.effort, 'okay');
+assert.equal(actionMemoryEntry.skipReason, null);
+assert.equal(getActionFeedbackSignal(actionMemoryEntry), 'helped_a_little');
 
 const hydratedLegacyActionMemoryEntry = hydrateActionMemoryEntry({
   ...actionMemoryEntry,
@@ -491,6 +506,33 @@ const helpfulnessMemory = buildHelpfulnessMemory([actionMemoryEntry]);
 assert.equal(helpfulnessMemory.length, 1);
 assert.equal(helpfulnessMemory[0].chainKey, 'work_feedback|head_pressure|self_blame');
 assert.equal(helpfulnessMemory[0].outcomeCounts.helped_a_little, 1);
+assert.equal(helpfulnessMemory[0].outcomeCounts.not_today, 0);
+
+const skippedActionMemoryEntry = createActionMemoryEntry({
+  traceRecord: savedTraces[0],
+  actionId: 'body-scan',
+  actionTitle: '2-min Body Scan',
+  recommendationMode: 'daily_action',
+  recommendationSource: 'daily_body_signal',
+  recommendationReason: 'Head pressure showed up today. Keep this focused on the body first.',
+  evidenceLine: 'For today: head pressure showed up in this trace.',
+  completionStatus: 'skipped',
+  helpfulness: null,
+  effort: null,
+  skipReason: 'not_today',
+  answers: {},
+  completedAt: '2026-06-19T09:12:00.000Z',
+});
+assert.equal(skippedActionMemoryEntry.completionStatus, 'skipped');
+assert.equal(skippedActionMemoryEntry.helpfulness, null);
+assert.equal(skippedActionMemoryEntry.effort, null);
+assert.equal(skippedActionMemoryEntry.skipReason, 'not_today');
+assert.equal(skippedActionMemoryEntry.outcomeLabel, 'Not today');
+assert.equal(getActionFeedbackSignal(skippedActionMemoryEntry), 'not_today');
+const skippedHelpfulnessMemory = buildHelpfulnessMemory([skippedActionMemoryEntry]);
+assert.equal(skippedHelpfulnessMemory[0].completions, 0);
+assert.equal(skippedHelpfulnessMemory[0].outcomeCounts.not_today, 1);
+assert.equal(skippedHelpfulnessMemory[0].outcomeCounts.did_not_help, 0);
 
 const dailyBodyRecommendation = getRuleBasedRecommendedAction({
   traceRecord: savedTraces[0],
@@ -561,10 +603,15 @@ const tooMuchActionMemoryEntry = createActionMemoryEntry({
   recommendationSource: 'body_signal',
   recommendationReason: 'Head pressure may be the early cue.',
   evidenceLine: 'Based on 4 saved traces.',
-  helpfulness: 'too_much',
+  completionStatus: 'completed',
+  helpfulness: null,
+  effort: 'too_much',
   answers: { body_notice: 'It felt hard to stay with.' },
   completedAt: '2026-06-19T09:20:00.000Z',
 });
+assert.equal(tooMuchActionMemoryEntry.helpfulness, null);
+assert.equal(tooMuchActionMemoryEntry.effort, 'too_much');
+assert.equal(getActionFeedbackSignal(tooMuchActionMemoryEntry), 'too_much');
 const lighterRecommendation = getRuleBasedRecommendedAction({
   traceRecord: loopReadyTraceRecord,
   actionMemoryEntries: [tooMuchActionMemoryEntry, actionMemoryEntry],

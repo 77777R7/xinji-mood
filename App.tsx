@@ -33,7 +33,7 @@ import {
   getLoopPatternRuleState,
   hydrateActionMemoryEntry,
   hydrateMoodTraceRecord,
-  type ActionHelpfulnessSignal,
+  type ActionFeedbackSignal,
   type ActionMemoryEntry,
   type ActionRecommendationMode,
   type BodySignalDayItem,
@@ -285,7 +285,7 @@ type ActiveTab = 'today' | 'patterns' | 'actions' | 'me';
 type ActionView = 'list' | 'detail' | 'browse';
 type MoodChartView = 'shape' | 'timeline';
 type ActionRunState = 'idle' | 'started' | 'completed';
-type ActionHelpfulness = ActionHelpfulnessSignal;
+type ActionHelpfulness = ActionFeedbackSignal;
 type MoodMemorySnapshot = {
   schemaVersion: number;
   savedAt: string;
@@ -568,14 +568,15 @@ const whatHelpedBeforeActions: WhatHelpedAction[] = [
 const helpfulnessLabels: Record<ActionHelpfulness, string> = {
   helped: 'Helped',
   helped_a_little: 'Helped a little',
-  did_not_help: 'Not today',
+  did_not_help: "Didn't help",
   too_much: 'Too much',
+  not_today: 'Not today',
 };
 
 const helpfulnessOptions: Array<{ value: ActionHelpfulness; label: string; image: ImageSourcePropType }> = [
   { value: 'helped', label: 'Yes', image: assets.feedbackHelped },
   { value: 'helped_a_little', label: 'A little', image: assets.feedbackHelpedALittle },
-  { value: 'did_not_help', label: 'Not today', image: assets.feedbackNotToday },
+  { value: 'not_today', label: 'Not today', image: assets.feedbackNotToday },
   { value: 'too_much', label: 'Too much', image: assets.feedbackTooMuch },
 ];
 
@@ -1471,13 +1472,17 @@ function ActionsScreenV2({
   const latestActionRewardCopy = latestActionRewardEntry
     ? getActionRewardCompletionCopy({
         rewardStamp: latestActionRewardEntry.rewardStamp,
+        completionStatus: latestActionRewardEntry.completionStatus,
         helpfulness: latestActionRewardEntry.helpfulness,
+        effort: latestActionRewardEntry.effort,
+        skipReason: latestActionRewardEntry.skipReason,
       })
     : null;
   const actionRewardIconName =
-    latestActionRewardEntry?.helpfulness === 'too_much'
+    latestActionRewardEntry?.effort === 'too_much'
       ? 'arrow-down-circle'
-      : latestActionRewardEntry?.helpfulness === 'did_not_help'
+      : latestActionRewardEntry?.completionStatus === 'skipped' ||
+          latestActionRewardEntry?.helpfulness === 'did_not_help'
         ? 'compass'
         : 'check-circle';
 
@@ -2613,7 +2618,12 @@ export default function App() {
       .map((record) => `${record.id}:${record.savedAt || record.createdAt}:${record.loopSignature.chainKey}`)
       .join('|');
     const actionKey = actionMemoryEntries
-      .map((entry) => `${entry.id}:${entry.completedAt}:${entry.helpfulness}`)
+      .map(
+        (entry) =>
+          `${entry.id}:${entry.completedAt}:${entry.completionStatus}:${entry.helpfulness || 'none'}:${
+            entry.effort || 'none'
+          }:${entry.skipReason || 'none'}`,
+      )
       .join('|');
     const requestKey = `${traceKey}::${actionKey}`;
 
@@ -3299,7 +3309,10 @@ export default function App() {
                 recommendationReason:
                   'Rora saw this work-feedback thread repeat and remembered this helped a little.',
                 evidenceLine: 'Based on 4 saved traces across 4 days.',
+                completionStatus: 'completed',
                 helpfulness: 'helped_a_little',
+                effort: 'okay',
+                skipReason: null,
                 answers: {
                   fact: 'A work message asked for one follow-up.',
                   guess: 'I guessed I had done something wrong.',
@@ -3440,7 +3453,20 @@ export default function App() {
       recommendationSource: recommendationSnapshot.source,
       recommendationReason: recommendationSnapshot.reason,
       evidenceLine: recommendationSnapshot.evidenceLine,
-      helpfulness: value,
+      completionStatus: value === 'not_today' ? 'skipped' : 'completed',
+      helpfulness:
+        value === 'helped' || value === 'helped_a_little' || value === 'did_not_help'
+          ? value
+          : null,
+      effort:
+        value === 'too_much'
+          ? 'too_much'
+          : value === 'helped'
+            ? 'easy'
+            : value === 'helped_a_little' || value === 'did_not_help'
+              ? 'okay'
+              : null,
+      skipReason: value === 'not_today' ? 'not_today' : null,
       answers: { ...actionAnswers },
     });
 

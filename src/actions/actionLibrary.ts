@@ -1,7 +1,7 @@
 import type { ComponentProps } from 'react';
 import type { ImageSourcePropType } from 'react-native';
 import type { Feather } from '@expo/vector-icons';
-import type { ActionHelpfulnessSignal, ActionRecommendationMode } from '../trace/dataFoundation';
+import type { ActionFeedbackSignal, ActionRecommendationMode } from '../trace/dataFoundation';
 
 type FeatherIconName = ComponentProps<typeof Feather>['name'];
 
@@ -120,7 +120,7 @@ export type ActionDefinition = {
   };
   avoidWhen: {
     safetyLevels: string[];
-    recentHelpfulness: ActionHelpfulnessSignal[];
+    recentHelpfulness: ActionFeedbackSignal[];
     contraindicationSignalKeys: string[];
   };
   steps: ActionStep[];
@@ -179,7 +179,7 @@ const actionAssets = {
 
 const actionAvoidWhen = {
   safetyLevels: ['high', 'urgent_medical'],
-  recentHelpfulness: ['too_much'] as ActionHelpfulnessSignal[],
+  recentHelpfulness: ['too_much'] as ActionFeedbackSignal[],
   contraindicationSignalKeys: ['self_harm_language', 'crisis_language'],
 };
 
