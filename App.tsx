@@ -5,6 +5,7 @@ import {
   Easing,
   Image,
   ImageBackground,
+  Linking,
   Platform,
   SafeAreaView,
   ScrollView,
@@ -23,17 +24,26 @@ import Svg, {
   Polygon as SvgPolygon,
 } from 'react-native-svg';
 import {
+  applyPatternFeedbackToRuleState,
   buildNormalizedTraceFields,
+  buildActionEffectFollowUp,
   buildHelpfulnessMemory,
   buildLoopSignaturesFromTraces,
   buildMoodTraceRecord,
+  buildPatternFeedbackState,
   buildWeeklyReflectionPreview,
   createActionMemoryEntry,
+  createPatternFeedbackEntry,
   getLoopIdentityKey,
   getLoopPatternRuleState,
   hydrateActionMemoryEntry,
   hydrateMoodTraceRecord,
+  hydratePatternFeedbackEntry,
   type ActionFeedbackSignal,
+  type PatternFeedbackEntry,
+  type PatternFeedbackMismatchReason,
+  type PatternFeedbackRating,
+  type PatternFeedbackState,
   type ActionMemoryEntry,
   type ActionRecommendationMode,
   type BodySignalDayItem,
@@ -67,13 +77,13 @@ import {
   browseActionOptions,
   fallbackActionId,
   getActionDefinition,
-  getActionImage,
   getEmptyActionAnswers,
   isActionId,
   type ActionAnswerKey,
   type ActionAnswers,
   type ActionDefinition,
   type ActionId,
+  type ActionStep,
   type RecommendedAction,
   type WhatHelpedAction,
 } from './src/actions/actionLibrary';
@@ -82,6 +92,7 @@ import {
   getRuleBasedRecommendedAction,
 } from './src/actions/actionRecommendation';
 import { getActionRewardCompletionCopy } from './src/actions/actionRewardCopy';
+import { fetchMoodAi } from './src/config/moodAiServer';
 
 const assets = {
   paper: require('./assets/figma/today/paper-bg.png'),
@@ -103,12 +114,6 @@ const assets = {
   actionGreenCard: require('./assets/figma/today/action-green-pulp-card.png'),
   actionIntroMascot: require('./assets/figma/today/action-heart-left-leaf-spaced-v1.png'),
   actionLeafSprig: require('./assets/figma/today/action-leaf-sprig-pulp-floating-v1.png'),
-  actionFgwSplit: require('./assets/figma/today/action-icons-v1/action-fgw-split-v1.png'),
-  actionBodyScan: require('./assets/figma/today/action-icons-v1/action-body-scan-v1.png'),
-  actionNameLoop: require('./assets/figma/today/action-icons-v1/action-name-loop-v1.png'),
-  actionTinyNextStep: require('./assets/figma/today/action-icons-v1/action-tiny-next-step-v1.png'),
-  actionEveningUnload: require('./assets/figma/today/action-icons-v1/action-evening-unload-v1.png'),
-  actionKindReframe: require('./assets/figma/today/action-icons-v1/action-kind-reframe-v1.png'),
   stepFact: require('./assets/figma/today/action-step-icons-v1/step-fact-v2.png'),
   stepGuess: require('./assets/figma/today/action-step-icons-v1/step-guess-v1.png'),
   stepWorry: require('./assets/figma/today/action-step-icons-v1/step-worry-v1.png'),
@@ -117,7 +122,6 @@ const assets = {
   stepChooseOneSmallStep: require('./assets/figma/today/action-step-icons-v1/step-choose-one-small-step-v1.png'),
   feedbackHelped: require('./assets/figma/today/action-feedback-icons-v1/feedback-helped-v1.png'),
   feedbackHelpedALittle: require('./assets/figma/today/action-feedback-icons-v1/feedback-helped-a-little-v1.png'),
-  feedbackNotToday: require('./assets/figma/today/action-feedback-icons-v1/feedback-not-today-v1.png'),
   feedbackTooMuch: require('./assets/figma/today/action-feedback-icons-v1/feedback-too-much-v1.png'),
   weeklyWhatShifted: require('./assets/figma/today/weekly-reflection-icons-v1/weekly-what-shifted-v1.png'),
   weeklyWhatHelped: require('./assets/figma/today/weekly-reflection-icons-v1/weekly-what-helped-v1.png'),
@@ -294,6 +298,7 @@ type MoodMemorySnapshot = {
   actionMemory: ActionMemoryEntry[];
   helpfulnessMemory: HelpfulnessMemory[];
   weeklyReflectionPreview: WeeklyReflectionPreview;
+  patternFeedback?: PatternFeedbackEntry[];
 };
 type PatternMilestoneId = 'thread' | 'loop_action';
 type PatternConfettiPiece = {
@@ -530,41 +535,6 @@ const loopEvidenceChips = [
   'Usually includes stomach tightness',
 ];
 
-const whatHelpedBeforeActions: WhatHelpedAction[] = [
-  {
-    id: 'body-scan',
-    actionId: 'body-scan',
-    title: '2-min Body Scan',
-    outcome: 'Helped',
-    date: 'Today',
-    image: assets.actionBodyScan,
-  },
-  {
-    id: 'evening-unload',
-    actionId: 'evening-unload',
-    title: 'Evening Unload List',
-    outcome: 'Easy to finish',
-    date: 'Yesterday',
-    image: assets.actionEveningUnload,
-  },
-  {
-    id: 'fact-guess-worry-split-old',
-    actionId: 'fact-guess-worry-split',
-    title: 'Fact / Guess / Worry Split',
-    outcome: 'Helped a little',
-    date: 'Jun 9',
-    image: assets.actionFgwSplit,
-  },
-  {
-    id: 'feedback-reframe',
-    actionId: 'kind-reframe',
-    title: 'Kind Reframe',
-    outcome: 'Worth trying again',
-    date: 'Jun 8',
-    image: assets.actionKindReframe,
-  },
-];
-
 const helpfulnessLabels: Record<ActionHelpfulness, string> = {
   helped: 'Helped',
   helped_a_little: 'Helped a little',
@@ -573,12 +543,33 @@ const helpfulnessLabels: Record<ActionHelpfulness, string> = {
   not_today: 'Not today',
 };
 
-const helpfulnessOptions: Array<{ value: ActionHelpfulness; label: string; image: ImageSourcePropType }> = [
+const helpfulnessOptions: Array<{
+  value: ActionHelpfulness;
+  label: string;
+  image: ImageSourcePropType | null;
+  iconName?: React.ComponentProps<typeof Feather>['name'];
+}> = [
   { value: 'helped', label: 'Yes', image: assets.feedbackHelped },
   { value: 'helped_a_little', label: 'A little', image: assets.feedbackHelpedALittle },
-  { value: 'not_today', label: 'Not today', image: assets.feedbackNotToday },
+  { value: 'did_not_help', label: "Didn't help", image: null, iconName: 'frown' },
   { value: 'too_much', label: 'Too much', image: assets.feedbackTooMuch },
 ];
+
+function renderHelpfulnessOptionIcon(option: (typeof helpfulnessOptions)[number]) {
+  if (option.image) {
+    return <Image source={option.image} style={styles.actionFeedbackButtonIcon} resizeMode="contain" />;
+  }
+
+  if (option.iconName) {
+    return (
+      <View style={styles.actionFeedbackButtonIconWrap}>
+        <Feather name={option.iconName} size={15} color="#8a7a68" />
+      </View>
+    );
+  }
+
+  return null;
+}
 
 const emptyActionAnswers: ActionAnswers = {};
 
@@ -712,12 +703,44 @@ function getAiProgressCopy(step: ReflectionReviewStep) {
   };
 }
 
+type SafetyResource = {
+  label: string;
+  contact: string;
+  href: string;
+  note: string;
+};
+
+// Verified 2026-08: 12356 is the PRC national unified psychological-assistance line
+// (国家卫健委, nationwide since 2025-05-01). 988 is the US Suicide & Crisis Lifeline.
+const crisisResources: SafetyResource[] = [
+  {
+    label: '心理援助热线',
+    contact: '12356',
+    href: 'tel:12356',
+    note: '全国统一心理援助热线',
+  },
+  {
+    label: 'Crisis Lifeline (US)',
+    contact: '988',
+    href: 'tel:988',
+    note: 'Suicide & Crisis Lifeline, 24/7',
+  },
+];
+
+const emergencyResource: SafetyResource = {
+  label: '紧急救助 / Emergency',
+  contact: '120 · 911',
+  href: 'tel:120',
+  note: '如果现在有立即危险 / If you are in immediate danger',
+};
+
 function getSafetySupportCopy(response: AiTraceExtractionResponse | null) {
   if (response?.safety.support === 'medical_note') {
     return {
       title: 'Let’s keep this as a private note first',
       note: 'Because this includes a body signal that could need care, Rora will not turn it into a pattern or recommend a regular action.',
       detail: 'If this feels sudden, severe, or unusual, consider getting medical help.',
+      resources: [emergencyResource],
     };
   }
 
@@ -726,7 +749,8 @@ function getSafetySupportCopy(response: AiTraceExtractionResponse | null) {
       title: 'This feels important',
       note: 'Rora will not turn this into a pattern or suggest a regular action right now.',
       detail:
-        'If you might be in immediate danger, contact local emergency services or someone you trust.',
+        'You do not have to hold this alone. These lines are free and answered by people, any hour.',
+      resources: [...crisisResources, emergencyResource],
     };
   }
 
@@ -734,6 +758,7 @@ function getSafetySupportCopy(response: AiTraceExtractionResponse | null) {
     title: 'Let’s save this gently',
     note: 'Rora can keep your words without using them for ordinary patterns yet.',
     detail: 'You can delete this draft or save it as a private note.',
+    resources: [],
   };
 }
 
@@ -807,7 +832,7 @@ async function transcribeRecordedAudio({
   audioBase64: string;
   audioMimeType: string;
 }) {
-  const response = await fetch('http://localhost:8084/api/mood-ai/transcribe', {
+  const response = await fetchMoodAi('/api/mood-ai/transcribe', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -887,10 +912,14 @@ function readPersistedMoodMemory() {
     }
 
     return JSON.parse(storedSnapshot) as MoodMemorySnapshot;
-  } catch {
+  } catch (error) {
+    console.warn('Rora could not read saved mood memory; starting from an empty state.', error);
+
     return null;
   }
 }
+
+let hasWarnedAboutPersistenceFailure = false;
 
 function writePersistedMoodMemory(snapshot: MoodMemorySnapshot) {
   if (Platform.OS !== 'web' || typeof window === 'undefined') {
@@ -899,8 +928,13 @@ function writePersistedMoodMemory(snapshot: MoodMemorySnapshot) {
 
   try {
     window.localStorage.setItem(MOOD_MEMORY_STORAGE_KEY, JSON.stringify(snapshot));
-  } catch {
-    // Local storage can fail in private browsing or embedded previews; the app should still work in memory.
+  } catch (error) {
+    // Private browsing and quota limits both land here. The app keeps working in memory,
+    // but traces will not survive a refresh, so make the failure diagnosable instead of silent.
+    if (!hasWarnedAboutPersistenceFailure) {
+      hasWarnedAboutPersistenceFailure = true;
+      console.warn('Rora could not persist mood memory to local storage.', error);
+    }
   }
 }
 
@@ -1073,6 +1107,10 @@ function formatMemoryDate(isoDate: string) {
   }
 
   return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+function getDisplayActionTitle(actionId: string, fallbackTitle: string) {
+  return isActionId(actionId) ? getActionDefinition(actionId).title : fallbackTitle;
 }
 
 function getCanonicalMoodLabel(label: string | null) {
@@ -1424,6 +1462,111 @@ function ActionsScreen() {
   );
 }
 
+const multiChoiceAnswerSeparator = ' · ';
+
+function getActionStepOptionValue(option: NonNullable<ActionStep['options']>[number]) {
+  return option.value || option.label;
+}
+
+function parseMultiChoiceAnswer(value: string) {
+  return value
+    .split(multiChoiceAnswerSeparator)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function ActionStepInputBlock({
+  step,
+  value,
+  noteValue,
+  onChangeActionAnswer,
+}: {
+  step: ActionStep;
+  value: string;
+  noteValue: string;
+  onChangeActionAnswer: (key: ActionAnswerKey, value: string) => void;
+}) {
+  const noteKey = `${step.key}_note`;
+  const options = step.options || [];
+  const selectedValues = step.inputKind === 'multi_choice' ? parseMultiChoiceAnswer(value) : [];
+  const shouldShowTextInput = step.inputKind === 'short_text' || step.inputKind === 'long_text';
+  const shouldShowOptions =
+    step.inputKind === 'single_choice' || step.inputKind === 'multi_choice' || step.inputKind === 'none';
+
+  const toggleOption = (optionValue: string) => {
+    if (step.inputKind === 'multi_choice') {
+      const nextValues = selectedValues.includes(optionValue)
+        ? selectedValues.filter((selectedValue) => selectedValue !== optionValue)
+        : [...selectedValues, optionValue];
+
+      onChangeActionAnswer(step.key, nextValues.join(multiChoiceAnswerSeparator));
+      return;
+    }
+
+    onChangeActionAnswer(step.key, optionValue);
+  };
+
+  return (
+    <View style={styles.actionInputBlock}>
+      <Text style={styles.actionInputLabel}>{step.title}</Text>
+      <Text style={styles.actionInputPrompt}>{step.prompt}</Text>
+      {step.detailPrompt ? <Text style={styles.actionInputDetail}>{step.detailPrompt}</Text> : null}
+
+      {shouldShowOptions ? (
+        <View style={styles.actionOptionGrid}>
+          {(options.length > 0 ? options : [{ id: 'done', label: 'Done' }]).map((option) => {
+            const optionValue = getActionStepOptionValue(option);
+            const isSelected =
+              step.inputKind === 'multi_choice'
+                ? selectedValues.includes(optionValue)
+                : value === optionValue;
+
+            return (
+              <TouchableOpacity
+                key={option.id}
+                activeOpacity={0.78}
+                accessibilityRole="button"
+                accessibilityLabel={`${step.title}: ${option.label}`}
+                onPress={() => toggleOption(optionValue)}
+                style={[styles.actionOptionChip, isSelected && styles.actionOptionChipSelected]}
+              >
+                {isSelected ? <Feather name="check" size={13} color="#fff8ef" /> : null}
+                <Text style={[styles.actionOptionText, isSelected && styles.actionOptionTextSelected]}>
+                  {option.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      ) : null}
+
+      {shouldShowTextInput ? (
+        <TextInput
+          multiline
+          value={value}
+          onChangeText={(nextValue) => onChangeActionAnswer(step.key, nextValue)}
+          placeholder={step.placeholder}
+          placeholderTextColor="#9a8b77"
+          style={[styles.actionInput, step.inputKind === 'long_text' && styles.actionInputLong]}
+          textAlignVertical="top"
+        />
+      ) : null}
+
+      {step.allowOptionalNote && !shouldShowTextInput ? (
+        <TextInput
+          multiline
+          value={noteValue}
+          onChangeText={(nextValue) => onChangeActionAnswer(noteKey, nextValue)}
+          placeholder={step.placeholder || 'Optional note'}
+          placeholderTextColor="#9a8b77"
+          style={styles.actionOptionalNoteInput}
+          textAlignVertical="top"
+        />
+      ) : null}
+    </View>
+  );
+}
+
 function ActionsScreenV2({
   activeActionView,
   actionRunState,
@@ -1445,6 +1588,8 @@ function ActionsScreenV2({
   onStartAction,
   onCompleteAction,
   onSelectHelpfulness,
+  onDeclineRecommendedAction,
+  isRecommendationDeclinedToday,
   onChangeActionAnswer,
 }: {
   activeActionView: ActionView;
@@ -1467,8 +1612,13 @@ function ActionsScreenV2({
   onStartAction: () => void;
   onCompleteAction: () => void;
   onSelectHelpfulness: (value: ActionHelpfulness) => void;
+  onDeclineRecommendedAction: () => void;
+  isRecommendationDeclinedToday: boolean;
   onChangeActionAnswer: (key: ActionAnswerKey, value: string) => void;
 }) {
+  // C4: the recommendation is offered, not imposed. It starts as one line the user can
+  // open ("want to see it?") or wave off ("Not today") without any follow-up questions.
+  const [isRecommendationOpen, setIsRecommendationOpen] = React.useState(false);
   const latestActionRewardCopy = latestActionRewardEntry
     ? getActionRewardCompletionCopy({
         rewardStamp: latestActionRewardEntry.rewardStamp,
@@ -1478,6 +1628,9 @@ function ActionsScreenV2({
         skipReason: latestActionRewardEntry.skipReason,
       })
     : null;
+  const latestActionRewardTitle = latestActionRewardEntry
+    ? getDisplayActionTitle(latestActionRewardEntry.actionId, latestActionRewardEntry.actionTitle)
+    : '';
   const actionRewardIconName =
     latestActionRewardEntry?.effort === 'too_much'
       ? 'arrow-down-circle'
@@ -1625,6 +1778,15 @@ function ActionsScreenV2({
               >
                 <Text style={styles.actionPrimaryButtonText}>Start</Text>
               </TouchableOpacity>
+              <TouchableOpacity
+                activeOpacity={0.78}
+                accessibilityRole="button"
+                accessibilityLabel={`Not today, ${selectedAction.title}`}
+                onPress={() => onSelectHelpfulness('not_today')}
+                style={styles.actionDeclineButton}
+              >
+                <Text style={styles.actionDeclineButtonText}>Not today</Text>
+              </TouchableOpacity>
             </>
           ) : null}
 
@@ -1632,19 +1794,13 @@ function ActionsScreenV2({
             <>
               <View style={styles.actionInputList}>
                 {selectedAction.steps.map((step) => (
-                  <View key={step.key} style={styles.actionInputBlock}>
-                    <Text style={styles.actionInputLabel}>{step.title}</Text>
-                    <Text style={styles.actionInputPrompt}>{step.prompt}</Text>
-                    <TextInput
-                      multiline
-                      value={actionAnswers[step.key] || ''}
-                      onChangeText={(value) => onChangeActionAnswer(step.key, value)}
-                      placeholder={step.placeholder}
-                      placeholderTextColor="#9a8b77"
-                      style={styles.actionInput}
-                      textAlignVertical="top"
-                    />
-                  </View>
+                  <ActionStepInputBlock
+                    key={step.key}
+                    step={step}
+                    value={actionAnswers[step.key] || ''}
+                    noteValue={actionAnswers[`${step.key}_note`] || ''}
+                    onChangeActionAnswer={onChangeActionAnswer}
+                  />
                 ))}
               </View>
               <TouchableOpacity
@@ -1679,7 +1835,7 @@ function ActionsScreenV2({
                       selectedHelpfulness === option.value && styles.actionFeedbackButtonSelected,
                     ]}
                   >
-                    <Image source={option.image} style={styles.actionFeedbackButtonIcon} resizeMode="contain" />
+                    {renderHelpfulnessOptionIcon(option)}
                     <Text
                       style={[
                         styles.actionFeedbackButtonText,
@@ -1724,7 +1880,7 @@ function ActionsScreenV2({
               <Text style={styles.actionRewardStampText}>{latestActionRewardCopy.badge}</Text>
             </View>
             <Text style={styles.actionRewardActionTitle} numberOfLines={1}>
-              {latestActionRewardEntry.actionTitle}
+              {latestActionRewardTitle}
             </Text>
           </View>
           <Text style={styles.actionRewardHeadline}>{latestActionRewardCopy.headline}</Text>
@@ -1736,6 +1892,38 @@ function ActionsScreenV2({
         </View>
       ) : null}
 
+      {isRecommendationDeclinedToday ? null : !isRecommendationOpen ? (
+        <View style={styles.actionOfferCard}>
+          <View style={styles.actionOfferCopy}>
+            <Text style={styles.actionOfferText}>
+              There’s a small experiment you could try — want to see it?
+            </Text>
+            <Text style={styles.actionOfferMeta}>
+              {recommendedActionDefinition.title} · {recommendedActionDefinition.estimatedMinutes} min
+            </Text>
+          </View>
+          <View style={styles.actionOfferButtonRow}>
+            <TouchableOpacity
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel={`Show today's suggestion, ${recommendedActionDefinition.title}`}
+              onPress={() => setIsRecommendationOpen(true)}
+              style={styles.actionOfferShowButton}
+            >
+              <Text style={styles.actionOfferShowButtonText}>Show me</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel={`Not today, ${recommendedActionDefinition.title}`}
+              onPress={onDeclineRecommendedAction}
+              style={styles.actionOfferDeclineButton}
+            >
+              <Text style={styles.actionOfferDeclineButtonText}>Not today</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      ) : (
       <TouchableOpacity
         activeOpacity={0.86}
         accessibilityRole="button"
@@ -1780,6 +1968,7 @@ function ActionsScreenV2({
         </View>
 
       </TouchableOpacity>
+      )}
 
       {canShowLoopAction ? (
         <TouchableOpacity
@@ -1803,44 +1992,50 @@ function ActionsScreenV2({
 
       <Text style={[styles.actionSectionLabel, styles.recentActionsLabel]}>What helped before</Text>
       <View style={styles.recentActionsCard}>
-        {whatHelpedActions.map((action, index) => (
-          <TouchableOpacity
-            key={action.id}
-            activeOpacity={0.78}
-            accessibilityRole="button"
-            accessibilityLabel={`Open ${action.title} from what helped before`}
-            onPress={() => onOpenActionDetail(action.actionId)}
-            style={styles.recentActionRow}
-          >
-            <View style={styles.recentActionIconWrap}>
-              {action.image ? (
-                <Image source={action.image} style={styles.recentActionImage} resizeMode="contain" />
-              ) : (
-                <Feather name={action.icon} size={25} color="#6b5b4a" />
-              )}
-            </View>
-            <View style={styles.recentActionCopy}>
-              <View style={styles.recentActionTopLine}>
-                <Text style={styles.recentActionTitle}>{action.title}</Text>
-                <Text style={styles.recentActionDate}>{action.date}</Text>
+        {whatHelpedActions.length === 0 ? (
+          <Text style={styles.recentActionsEmptyText}>
+            Nothing here yet. After you try an action and tell Rora how it went, it will show up here.
+          </Text>
+        ) : (
+          whatHelpedActions.map((action, index) => (
+            <TouchableOpacity
+              key={action.id}
+              activeOpacity={0.78}
+              accessibilityRole="button"
+              accessibilityLabel={`Open ${action.title} from what helped before`}
+              onPress={() => onOpenActionDetail(action.actionId)}
+              style={styles.recentActionRow}
+            >
+              <View style={styles.recentActionIconWrap}>
+                {action.image ? (
+                  <Image source={action.image} style={styles.recentActionImage} resizeMode="contain" />
+                ) : (
+                  <Feather name={action.icon} size={25} color="#6b5b4a" />
+                )}
               </View>
-              <View style={styles.whatHelpedOutcomeRow}>
-                <View style={[styles.whatHelpedPill, action.isNew && styles.whatHelpedPillNew]}>
-                  <Text style={[styles.whatHelpedPillText, action.isNew && styles.whatHelpedPillTextNew]}>
-                    {action.outcome}
-                  </Text>
+              <View style={styles.recentActionCopy}>
+                <View style={styles.recentActionTopLine}>
+                  <Text style={styles.recentActionTitle} numberOfLines={1}>{action.title}</Text>
+                  <Text style={styles.recentActionDate}>{action.date}</Text>
                 </View>
-                {action.isNew ? <Text style={styles.whatHelpedSavedText}>Just saved</Text> : null}
+                <View style={styles.whatHelpedOutcomeRow}>
+                  <View style={[styles.whatHelpedPill, action.isNew && styles.whatHelpedPillNew]}>
+                    <Text style={[styles.whatHelpedPillText, action.isNew && styles.whatHelpedPillTextNew]}>
+                      {action.outcome}
+                    </Text>
+                  </View>
+                  {action.isNew ? <Text style={styles.whatHelpedSavedText}>Just saved</Text> : null}
+                </View>
+                {action.loopLabel ? (
+                  <Text style={styles.whatHelpedLoopText} numberOfLines={2}>
+                    {action.loopLabel} · {action.matchLabel}
+                  </Text>
+                ) : null}
               </View>
-              {action.loopLabel ? (
-                <Text style={styles.whatHelpedLoopText}>
-                  {action.loopLabel} · {action.matchLabel}
-                </Text>
-              ) : null}
-            </View>
-            {index < whatHelpedActions.length - 1 ? <View style={styles.recentActionDivider} /> : null}
-          </TouchableOpacity>
-        ))}
+              {index < whatHelpedActions.length - 1 ? <View style={styles.recentActionDivider} /> : null}
+            </TouchableOpacity>
+          ))
+        )}
       </View>
 
       <TouchableOpacity
@@ -2168,21 +2363,27 @@ function PatternsScreen({
   currentTraceRecord,
   loopSignatures,
   savedTraceRecords,
+  patternFeedbackEntries,
   recommendedAction,
   recommendedActionDefinition,
   weeklyReflectionPreview,
   onTryLoopAction,
+  onPatternFeedback,
 }: {
   currentTraceRecord: MoodTraceRecord | null;
   loopSignatures: LoopSignature[];
   savedTraceRecords: MoodTraceRecord[];
+  patternFeedbackEntries: PatternFeedbackEntry[];
   recommendedAction: RecommendedAction;
   recommendedActionDefinition: ActionDefinition;
   weeklyReflectionPreview: WeeklyReflectionPreview;
   onTryLoopAction: () => void;
+  onPatternFeedback: (rating: PatternFeedbackRating, mismatchReason?: PatternFeedbackMismatchReason | null) => void;
 }) {
   const [expandedSignalDay, setExpandedSignalDay] = React.useState<string | null>(null);
   const [moodChartView, setMoodChartView] = React.useState<MoodChartView>('timeline');
+  const [showMismatchOptions, setShowMismatchOptions] = React.useState(false);
+  const [showPatternEvidence, setShowPatternEvidence] = React.useState(false);
   const bodySignalDays = React.useMemo(
     () => buildBodySignalDaysFromTraces(savedTraceRecords),
     [savedTraceRecords],
@@ -2201,8 +2402,60 @@ function PatternsScreen({
   );
   const expandedSignalDayItem = bodySignalDays.find((item) => item.day === expandedSignalDay);
   const activeLoopSignature = currentTraceRecord?.loopSignature || loopSignatures[0] || null;
-  const patternVisibility = getPatternVisibility(activeLoopSignature, savedTraceRecords);
+  const activeLoopRecords = React.useMemo(
+    () => getLoopRecords(savedTraceRecords, activeLoopSignature?.chainKey || null),
+    [activeLoopSignature, savedTraceRecords],
+  );
+  // Evidence for the "based on these records" reveal: one record per day, newest first,
+  // only the days the loop card is actually built from.
+  const patternEvidenceRecords = React.useMemo(() => {
+    const seenDays = new Set<string>();
+
+    return [...activeLoopRecords]
+      .filter((record) => record.safetyAssessment.canShowPattern)
+      .sort((left, right) => getTraceRecordDate(right).localeCompare(getTraceRecordDate(left)))
+      .filter((record) => {
+        const dayKey = getTraceRecordDate(record).slice(0, 10);
+
+        if (seenDays.has(dayKey)) {
+          return false;
+        }
+
+        seenDays.add(dayKey);
+        return true;
+      })
+      .slice(0, 3);
+  }, [activeLoopRecords]);
+  const patternFeedbackState = React.useMemo(
+    () =>
+      buildPatternFeedbackState(
+        patternFeedbackEntries,
+        activeLoopSignature?.chainKey || null,
+        activeLoopRecords[0]?.savedAt || activeLoopRecords[0]?.createdAt || null,
+        activeLoopRecords,
+      ),
+    [activeLoopRecords, activeLoopSignature, patternFeedbackEntries],
+  );
+  const patternVisibility = applyPatternFeedbackToRuleState(
+    getPatternVisibility(activeLoopSignature, savedTraceRecords),
+    patternFeedbackState,
+  );
   const patternState = getPatternState(patternVisibility);
+  const showFeedbackPrompt =
+    patternFeedbackState.status === 'none' || patternFeedbackState.canPromptAgain;
+
+  const handleFeedbackFeelsRight = React.useCallback(() => {
+    setShowMismatchOptions(false);
+    onPatternFeedback('feels_right');
+  }, [onPatternFeedback]);
+
+  const handleFeedbackMismatch = React.useCallback(
+    (reason: PatternFeedbackMismatchReason) => {
+      setShowMismatchOptions(false);
+      onPatternFeedback('not_quite', reason);
+    },
+    [onPatternFeedback],
+  );
   const loopChainForDisplay = activeLoopSignature?.signalKeys || repeatingLoopChain;
   const weeklyCard = weeklyReflectionPreview.summaryCard;
   return (
@@ -2220,11 +2473,127 @@ function PatternsScreen({
           <Text style={styles.patternSubtext}>{patternState.subtitle}</Text>
           <Text style={styles.patternEvidenceLine}>{getPatternEvidenceLine(patternVisibility)}</Text>
 
+          {patternEvidenceRecords.length > 0 ? (
+            <View style={styles.patternEvidenceBlock}>
+              <TouchableOpacity
+                activeOpacity={0.78}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  showPatternEvidence
+                    ? 'Hide the records this loop is based on'
+                    : `Show the ${patternEvidenceRecords.length} saved ${
+                        patternEvidenceRecords.length === 1 ? 'record' : 'records'
+                      } this loop is based on`
+                }
+                onPress={() => setShowPatternEvidence((currentShow) => !currentShow)}
+                style={styles.patternEvidenceToggle}
+              >
+                <Text style={styles.patternEvidenceToggleText}>
+                  {showPatternEvidence ? 'Hide the records behind this' : 'Based on these records'}
+                </Text>
+                <Feather
+                  name={showPatternEvidence ? 'chevron-up' : 'chevron-down'}
+                  size={14}
+                  color="#5b6f41"
+                />
+              </TouchableOpacity>
+              {showPatternEvidence ? (
+                <View style={styles.patternEvidenceList}>
+                  {patternEvidenceRecords.map((record) => {
+                    const recordDate = formatMemoryDate(getTraceRecordDate(record));
+                    const recordExcerpt = getTranscriptExcerpt(record.transcript);
+
+                    return (
+                      <View key={record.id} style={styles.patternEvidenceRow}>
+                        <Text style={styles.patternEvidenceRowDate}>{recordDate}</Text>
+                        <Text style={styles.patternEvidenceRowText} numberOfLines={3}>
+                          {recordExcerpt}
+                        </Text>
+                      </View>
+                    );
+                  })}
+                </View>
+              ) : null}
+            </View>
+          ) : null}
+
           <View style={styles.loopList}>
             {loopChainForDisplay.map((item, index, chain) => (
               <LoopRow key={`${item}-${index}`} item={item} isLast={index === chain.length - 1} />
             ))}
           </View>
+
+          {patternFeedbackState.status === 'confirmed' ? (
+            <View style={styles.patternFeedbackConfirmedRow}>
+              <Feather name="check-circle" size={16} color="#5b6f41" />
+              <Text style={styles.patternFeedbackConfirmedText}>
+                You said this feels right. Rora will keep an eye on it.
+              </Text>
+            </View>
+          ) : showFeedbackPrompt ? (
+            <View style={styles.patternFeedbackBlock}>
+              {!showMismatchOptions ? (
+                <>
+                  <Text style={styles.patternFeedbackQuestion}>Does this feel right to you?</Text>
+                  <View style={styles.patternFeedbackButtonRow}>
+                    <TouchableOpacity
+                      accessibilityRole="button"
+                      accessibilityLabel="This pattern feels right"
+                      onPress={handleFeedbackFeelsRight}
+                      style={[styles.patternFeedbackButton, styles.patternFeedbackButtonPrimary]}
+                    >
+                      <Text style={styles.patternFeedbackButtonPrimaryText}>Feels right</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      accessibilityRole="button"
+                      accessibilityLabel="This pattern is not quite right"
+                      onPress={() => setShowMismatchOptions(true)}
+                      style={styles.patternFeedbackButton}
+                    >
+                      <Text style={styles.patternFeedbackButtonText}>Not quite</Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              ) : (
+                <>
+                  <Text style={styles.patternFeedbackQuestion}>What feels off about it?</Text>
+                  <View style={styles.patternFeedbackOptionList}>
+                    <TouchableOpacity
+                      accessibilityRole="button"
+                      accessibilityLabel="The situation is off"
+                      onPress={() => handleFeedbackMismatch('context_mismatch')}
+                      style={styles.patternFeedbackOption}
+                    >
+                      <Text style={styles.patternFeedbackOptionText}>The situation is off</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      accessibilityRole="button"
+                      accessibilityLabel="The feeling is off"
+                      onPress={() => handleFeedbackMismatch('feeling_mismatch')}
+                      style={styles.patternFeedbackOption}
+                    >
+                      <Text style={styles.patternFeedbackOptionText}>The feeling is off</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      accessibilityRole="button"
+                      accessibilityLabel="There is no such loop"
+                      onPress={() => handleFeedbackMismatch('not_a_pattern')}
+                      style={styles.patternFeedbackOption}
+                    >
+                      <Text style={styles.patternFeedbackOptionText}>There’s no such loop</Text>
+                    </TouchableOpacity>
+                  </View>
+                </>
+              )}
+            </View>
+          ) : patternFeedbackState.status === 'watching' ? (
+            <View style={styles.patternFeedbackConfirmedRow}>
+              <Feather name="eye" size={16} color="#8a7d68" />
+              <Text style={styles.patternFeedbackWatchingText}>
+                Thanks — Rora will double-check this one as new traces come in.
+              </Text>
+            </View>
+          ) : null}
 
           {patternVisibility.canShowLoopAction ? (
             <TouchableOpacity
@@ -2404,6 +2773,7 @@ export default function App() {
   const [traceResult, setTraceResult] = React.useState<MockTraceResult>(startingFocusTraceResult);
   const [savedTraceRecords, setSavedTraceRecords] = React.useState<MoodTraceRecord[]>([]);
   const [actionMemoryEntries, setActionMemoryEntries] = React.useState<ActionMemoryEntry[]>([]);
+  const [patternFeedbackEntries, setPatternFeedbackEntries] = React.useState<PatternFeedbackEntry[]>([]);
   const [aiWeeklyReflectionPreview, setAiWeeklyReflectionPreview] =
     React.useState<WeeklyReflectionPreview | null>(null);
   const [hasHydratedMemory, setHasHydratedMemory] = React.useState(false);
@@ -2458,9 +2828,23 @@ export default function App() {
     () => getLoopRecords(savedTraceRecords, currentTraceRecord?.loopSignature.chainKey || null),
     [currentTraceRecord, savedTraceRecords],
   );
+  const currentPatternFeedbackState = React.useMemo(
+    () =>
+      buildPatternFeedbackState(
+        patternFeedbackEntries,
+        currentTraceRecord?.loopSignature.chainKey || null,
+        currentLoopTraceRecords[0]?.savedAt || currentLoopTraceRecords[0]?.createdAt || null,
+        currentLoopTraceRecords,
+      ),
+    [currentLoopTraceRecords, currentTraceRecord, patternFeedbackEntries],
+  );
   const currentPatternVisibility = React.useMemo(
-    () => getPatternVisibility(currentTraceRecord?.loopSignature || null, savedTraceRecords),
-    [currentTraceRecord, savedTraceRecords],
+    () =>
+      applyPatternFeedbackToRuleState(
+        getPatternVisibility(currentTraceRecord?.loopSignature || null, savedTraceRecords),
+        currentPatternFeedbackState,
+      ),
+    [currentPatternFeedbackState, currentTraceRecord, savedTraceRecords],
   );
   const currentPatternEvidenceLine = React.useMemo(
     () => getPatternEvidenceLine(currentPatternVisibility),
@@ -2499,6 +2883,18 @@ export default function App() {
     () => getActionDefinition(dailyRecommendedAction.actionId),
     [dailyRecommendedAction],
   );
+  // C4: "Not today" is a standing answer for the rest of the day — the offer line stays
+  // hidden even across tab switches and reloads, because the skip lives in action memory.
+  const isRecommendationDeclinedToday = React.useMemo(() => {
+    const todayKey = new Date().toISOString().slice(0, 10);
+
+    return actionMemoryEntries.some(
+      (entry) =>
+        entry.actionId === dailyRecommendedAction.actionId &&
+        entry.completionStatus === 'skipped' &&
+        entry.completedAt.slice(0, 10) === todayKey,
+    );
+  }, [actionMemoryEntries, dailyRecommendedAction]);
   const loopRecommendedAction = React.useMemo(
     () =>
       getRuleBasedRecommendedAction({
@@ -2535,6 +2931,39 @@ export default function App() {
       currentTraceRecord.loopSignature.chainKey,
     );
   }, [currentTraceRecord, helpfulnessMemories]);
+  // C2: one honest follow-up line about whether the loop came back after the last
+  // completed action. Only shown alongside a saved check-in result.
+  const actionEffectFollowUp = React.useMemo(
+    () =>
+      currentTraceRecord
+        ? buildActionEffectFollowUp({
+            actionMemoryEntries,
+            traceRecords: savedTraceRecords,
+            loopSignatures,
+          })
+        : null,
+    [actionMemoryEntries, currentTraceRecord, loopSignatures, savedTraceRecords],
+  );
+
+  const handlePatternFeedback = React.useCallback(
+    (rating: PatternFeedbackRating, mismatchReason: PatternFeedbackMismatchReason | null = null) => {
+      const chainKey = currentTraceRecord?.loopSignature.chainKey;
+
+      if (!chainKey) {
+        return;
+      }
+
+      const feedbackEntry = createPatternFeedbackEntry({
+        chainKey,
+        traceId: currentTraceRecord?.id || null,
+        rating,
+        mismatchReason,
+      });
+
+      setPatternFeedbackEntries((currentEntries) => [...currentEntries, feedbackEntry]);
+    },
+    [currentTraceRecord],
+  );
 
   React.useEffect(() => {
     const persistedSnapshot = readPersistedMoodMemory();
@@ -2551,10 +2980,16 @@ export default function App() {
     const persistedActionMemory = Array.isArray(persistedSnapshot.actionMemory)
       ? persistedSnapshot.actionMemory.map(hydrateActionMemoryEntry)
       : [];
+    const persistedPatternFeedback = Array.isArray(persistedSnapshot.patternFeedback)
+      ? persistedSnapshot.patternFeedback
+          .map(hydratePatternFeedbackEntry)
+          .filter((entry): entry is PatternFeedbackEntry => entry !== null)
+      : [];
     const latestTrace = persistedTraces[0] || null;
 
     setSavedTraceRecords(persistedTraces);
     setActionMemoryEntries(persistedActionMemory);
+    setPatternFeedbackEntries(persistedPatternFeedback);
 
     if (latestTrace) {
       setSavedTranscript(latestTrace.transcript);
@@ -2684,6 +3119,7 @@ export default function App() {
       actionMemory: actionMemoryEntries,
       helpfulnessMemory: helpfulnessMemories,
       weeklyReflectionPreview: displayWeeklyReflectionPreview,
+      patternFeedback: patternFeedbackEntries,
     });
   }, [
     actionMemoryEntries,
@@ -2691,6 +3127,7 @@ export default function App() {
     hasHydratedMemory,
     helpfulnessMemories,
     loopSignatures,
+    patternFeedbackEntries,
     savedTraceRecords,
   ]);
   const reflectionPrompt = React.useMemo(
@@ -3166,23 +3603,40 @@ export default function App() {
 
       return right.completedAt.localeCompare(left.completedAt);
     });
-    const savedActionRows = sortedMemoryEntries.map((entry, index) => ({
-      id: entry.id,
-      actionId: isActionId(entry.actionId) ? entry.actionId : fallbackActionId,
-      title: entry.actionTitle,
-      outcome: entry.outcomeLabel,
-      date: formatMemoryDate(entry.completedAt),
-      image: getActionImage(isActionId(entry.actionId) ? entry.actionId : fallbackActionId),
-      isNew: Boolean(selectedHelpfulness) && index === 0,
-      loopLabel: currentChainKey && entry.chainKey === currentChainKey ? 'For this loop' : 'Past loop',
-      matchLabel:
-        currentChainKey && entry.chainKey === currentChainKey
+
+    const groupedMemoryEntries = new Map<string, ActionMemoryEntry>();
+
+    sortedMemoryEntries.forEach((entry) => {
+      const actionId = isActionId(entry.actionId) ? entry.actionId : fallbackActionId;
+      const groupKey = `${entry.chainKey}::${actionId}`;
+
+      if (!groupedMemoryEntries.has(groupKey)) {
+        groupedMemoryEntries.set(groupKey, entry);
+      }
+    });
+
+    const savedActionRows = Array.from(groupedMemoryEntries.values()).map((entry) => {
+      const actionId = isActionId(entry.actionId) ? entry.actionId : fallbackActionId;
+      const actionDefinition = getActionDefinition(actionId);
+      const isSameLoop = Boolean(currentChainKey && entry.chainKey === currentChainKey);
+
+      return {
+        id: `${entry.chainKey}-${actionId}`,
+        actionId,
+        title: actionDefinition.title,
+        outcome: entry.outcomeLabel,
+        date: formatMemoryDate(entry.completedAt),
+        image: actionDefinition.image,
+        isNew: Boolean(selectedHelpfulness) && entry.id === actionMemoryEntries[0]?.id,
+        loopLabel: isSameLoop ? 'Same loop' : 'Past loop',
+        matchLabel: isSameLoop
           ? currentTraceRecord?.loopSignature.label
           : loopSignatures.find((signature) => signature.chainKey === entry.chainKey)?.label ||
             'Saved from another trace',
-    }));
+      };
+    });
 
-    return [...savedActionRows, ...whatHelpedBeforeActions];
+    return savedActionRows.slice(0, 3);
   }, [actionMemoryEntries, currentTraceRecord, loopSignatures, selectedHelpfulness]);
 
   const currentNoticingContent =
@@ -3413,7 +3867,13 @@ export default function App() {
     scrollToTop();
   };
 
-  const saveActionHelpfulness = (value: ActionHelpfulness) => {
+  const saveActionHelpfulness = (
+    value: ActionHelpfulness,
+    actionOverride?: { definition: ActionDefinition; recommendation: RecommendedAction },
+  ) => {
+    const feedbackAction = actionOverride?.definition || selectedAction;
+    const feedbackRecommendation = actionOverride?.recommendation || selectedActionRecommendation;
+    const feedbackAnswers = actionOverride ? {} : { ...actionAnswers };
     const actionTranscript = savedTranscript.trim() || getTraceResultFallbackTranscript(traceResult);
     const actionBodySignalLabels =
       selectedBodySignals.length > 0 ? selectedBodySignals : getConfirmedBodySignalLabels(traceResult);
@@ -3439,16 +3899,16 @@ export default function App() {
         });
       })();
     const recommendationSnapshot =
-      selectedAction.id === selectedActionRecommendation.actionId
-        ? selectedActionRecommendation
+      feedbackAction.id === feedbackRecommendation.actionId
+        ? feedbackRecommendation
         : {
-            ...selectedActionRecommendation,
-            reason: selectedAction.reason,
+            ...feedbackRecommendation,
+            reason: feedbackAction.reason,
           };
     const nextActionMemoryEntry = createActionMemoryEntry({
       traceRecord: traceRecordForAction,
-      actionId: selectedAction.id,
-      actionTitle: selectedAction.title,
+      actionId: feedbackAction.id,
+      actionTitle: feedbackAction.title,
       recommendationMode: recommendationSnapshot.mode,
       recommendationSource: recommendationSnapshot.source,
       recommendationReason: recommendationSnapshot.reason,
@@ -3467,7 +3927,7 @@ export default function App() {
               ? 'okay'
               : null,
       skipReason: value === 'not_today' ? 'not_today' : null,
-      answers: { ...actionAnswers },
+      answers: feedbackAnswers,
     });
 
     if (!currentTraceRecord) {
@@ -3479,6 +3939,15 @@ export default function App() {
     setActiveActionView('list');
     setActionRunState('completed');
     scrollToTop();
+  };
+
+  // C4: declining the offered recommendation from the list card records a quiet skip for
+  // that exact action — no detail visit, no follow-up questions.
+  const declineRecommendedAction = () => {
+    saveActionHelpfulness('not_today', {
+      definition: dailyRecommendedActionDefinition,
+      recommendation: dailyRecommendedAction,
+    });
   };
 
   const openEditTranscript = () => {
@@ -3804,6 +4273,16 @@ export default function App() {
       {currentNoticingContent.note ? (
         <Text style={styles.noticingNote}>{currentNoticingContent.note}</Text>
       ) : null}
+      {noticingState === 'today_trace' && actionEffectFollowUp ? (
+        <View style={styles.actionFollowUpRow}>
+          <Feather
+            name={actionEffectFollowUp.outcome === 'stayed_quiet' ? 'sun' : 'rotate-ccw'}
+            size={13}
+            color="#5b6f41"
+          />
+          <Text style={styles.actionFollowUpText}>{actionEffectFollowUp.sentence}</Text>
+        </View>
+      ) : null}
     </>
   );
 
@@ -3824,10 +4303,12 @@ export default function App() {
                 currentTraceRecord={currentTraceRecord}
                 loopSignatures={loopSignatures}
                 savedTraceRecords={savedTraceRecords}
+                patternFeedbackEntries={patternFeedbackEntries}
                 recommendedAction={loopRecommendedAction}
                 recommendedActionDefinition={loopRecommendedActionDefinition}
                 weeklyReflectionPreview={displayWeeklyReflectionPreview}
                 onTryLoopAction={() => openActionDetail(loopRecommendedActionDefinition.id, 'loop_action')}
+                onPatternFeedback={handlePatternFeedback}
               />
             ) : activeTab === 'actions' ? (
               <ActionsScreenV2
@@ -3851,6 +4332,8 @@ export default function App() {
                 onStartAction={startAction}
                 onCompleteAction={completeAction}
                 onSelectHelpfulness={saveActionHelpfulness}
+                onDeclineRecommendedAction={declineRecommendedAction}
+                isRecommendationDeclinedToday={isRecommendationDeclinedToday}
                 onChangeActionAnswer={updateActionAnswer}
               />
             ) : (
@@ -3903,7 +4386,8 @@ export default function App() {
                   </TouchableOpacity>
                 )}
 
-                {currentTraceRecord?.safetyAssessment.canRecommendAction ? (
+                {currentTraceRecord?.safetyAssessment.canRecommendAction &&
+                !isRecommendationDeclinedToday ? (
                   <TouchableOpacity
                     activeOpacity={0.82}
                     accessibilityRole="button"
@@ -4319,6 +4803,29 @@ export default function App() {
                           <Feather name="alert-circle" size={17} color="#8d6540" />
                           <Text style={styles.safetySupportText}>{safetyCopy.detail}</Text>
                         </View>
+                        {safetyCopy.resources.length > 0 ? (
+                          <View style={styles.safetyResourceList}>
+                            {safetyCopy.resources.map((resource) => (
+                              <TouchableOpacity
+                                key={resource.contact}
+                                activeOpacity={0.75}
+                                accessibilityRole="link"
+                                accessibilityLabel={`${resource.label}, ${resource.contact}. ${resource.note}`}
+                                onPress={() => {
+                                  void Linking.openURL(resource.href).catch(() => undefined);
+                                }}
+                                style={styles.safetyResourceRow}
+                              >
+                                <Feather name="phone" size={16} color="#5b6f41" />
+                                <View style={styles.safetyResourceCopy}>
+                                  <Text style={styles.safetyResourceLabel}>{resource.label}</Text>
+                                  <Text style={styles.safetyResourceNote}>{resource.note}</Text>
+                                </View>
+                                <Text style={styles.safetyResourceContact}>{resource.contact}</Text>
+                              </TouchableOpacity>
+                            ))}
+                          </View>
+                        ) : null}
                         <View style={styles.draftReviewExcerpt}>
                           <Text style={styles.draftReviewExcerptLabel}>Your words</Text>
                           <Text style={styles.draftReviewExcerptText}>“{getTranscriptExcerpt(draftTranscript)}”</Text>
@@ -4589,7 +5096,7 @@ const styles = StyleSheet.create({
   content: {
     paddingTop: 28,
     paddingHorizontal: 20,
-    paddingBottom: 156,
+    paddingBottom: 220,
   },
   title: {
     color: '#2c3236',
@@ -4759,6 +5266,22 @@ const styles = StyleSheet.create({
     fontSize: 12,
     lineHeight: 17,
     letterSpacing: 0,
+  },
+  actionFollowUpRow: {
+    marginTop: 12,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#eadfca',
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 7,
+  },
+  actionFollowUpText: {
+    flex: 1,
+    color: '#5b6f41',
+    fontFamily: Platform.select({ ios: 'Inter', default: 'sans-serif' }),
+    fontSize: 12,
+    lineHeight: 17,
   },
   todayActionBridgeCard: {
     width: '100%',
@@ -5399,6 +5922,53 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     lineHeight: 15,
   },
+  patternEvidenceBlock: {
+    marginTop: 4,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#e8e0cd',
+    backgroundColor: '#faf6ec',
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  patternEvidenceToggle: {
+    minHeight: 22,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 8,
+  },
+  patternEvidenceToggleText: {
+    color: '#5b6f41',
+    fontFamily: Platform.select({ ios: 'Inter', default: 'sans-serif' }),
+    fontSize: 12,
+    fontWeight: '800',
+    lineHeight: 16,
+  },
+  patternEvidenceList: {
+    marginTop: 8,
+    gap: 8,
+  },
+  patternEvidenceRow: {
+    borderTopWidth: 1,
+    borderTopColor: '#eee6d4',
+    paddingTop: 8,
+    gap: 3,
+  },
+  patternEvidenceRowDate: {
+    color: colors.mutedText,
+    fontFamily: Platform.select({ ios: 'Inter', default: 'sans-serif' }),
+    fontSize: 11,
+    fontWeight: '800',
+    lineHeight: 15,
+  },
+  patternEvidenceRowText: {
+    color: colors.softText,
+    fontFamily: Platform.select({ ios: 'Inter', default: 'sans-serif' }),
+    fontSize: 12,
+    fontWeight: '500',
+    lineHeight: 17,
+  },
   evidenceStripLabel: {
     color: colors.mutedText,
     fontFamily: Platform.select({ ios: 'Inter', default: 'sans-serif' }),
@@ -5602,6 +6172,94 @@ const styles = StyleSheet.create({
     width: 19,
     height: 27,
     opacity: 0.9,
+  },
+  patternFeedbackBlock: {
+    marginTop: 14,
+    borderTopWidth: 0.7,
+    borderTopColor: '#e8dcc4',
+    paddingTop: 12,
+  },
+  patternFeedbackQuestion: {
+    color: colors.mutedText,
+    fontFamily: Platform.select({ ios: 'Inter', default: 'sans-serif' }),
+    fontSize: 12,
+    fontWeight: '600',
+    lineHeight: 16,
+  },
+  patternFeedbackButtonRow: {
+    marginTop: 9,
+    flexDirection: 'row',
+    gap: 8,
+  },
+  patternFeedbackButton: {
+    minHeight: 36,
+    borderRadius: 999,
+    borderWidth: 0.7,
+    borderColor: '#d9c9ae',
+    backgroundColor: '#faf3e4',
+    paddingHorizontal: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  patternFeedbackButtonPrimary: {
+    backgroundColor: '#eef2e2',
+    borderColor: '#b9c69c',
+  },
+  patternFeedbackButtonText: {
+    color: colors.softText,
+    fontFamily: Platform.select({ ios: 'Inter', default: 'sans-serif' }),
+    fontSize: 12,
+    fontWeight: '700',
+    lineHeight: 16,
+  },
+  patternFeedbackButtonPrimaryText: {
+    color: '#5b6f41',
+    fontFamily: Platform.select({ ios: 'Inter', default: 'sans-serif' }),
+    fontSize: 12,
+    fontWeight: '800',
+    lineHeight: 16,
+  },
+  patternFeedbackOptionList: {
+    marginTop: 9,
+    gap: 7,
+  },
+  patternFeedbackOption: {
+    minHeight: 36,
+    borderRadius: 12,
+    borderWidth: 0.7,
+    borderColor: '#d9c9ae',
+    backgroundColor: '#faf3e4',
+    paddingHorizontal: 12,
+    justifyContent: 'center',
+  },
+  patternFeedbackOptionText: {
+    color: colors.softText,
+    fontFamily: Platform.select({ ios: 'Inter', default: 'sans-serif' }),
+    fontSize: 12,
+    fontWeight: '600',
+    lineHeight: 16,
+  },
+  patternFeedbackConfirmedRow: {
+    marginTop: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+  },
+  patternFeedbackConfirmedText: {
+    flex: 1,
+    color: '#5b6f41',
+    fontFamily: Platform.select({ ios: 'Inter', default: 'sans-serif' }),
+    fontSize: 11,
+    fontWeight: '700',
+    lineHeight: 15,
+  },
+  patternFeedbackWatchingText: {
+    flex: 1,
+    color: colors.mutedText,
+    fontFamily: Platform.select({ ios: 'Inter', default: 'sans-serif' }),
+    fontSize: 11,
+    fontWeight: '600',
+    lineHeight: 15,
   },
   tryActionButton: {
     marginTop: 16,
@@ -6832,6 +7490,46 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     lineHeight: 15,
   },
+  actionInputDetail: {
+    marginTop: 5,
+    color: colors.mutedText,
+    fontFamily: Platform.select({ ios: 'Inter', default: 'sans-serif' }),
+    fontSize: 11,
+    fontWeight: '500',
+    lineHeight: 16,
+  },
+  actionOptionGrid: {
+    marginTop: 9,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  actionOptionChip: {
+    minHeight: 34,
+    borderRadius: 999,
+    borderWidth: 0.8,
+    borderColor: '#e1d2bb',
+    backgroundColor: '#fbf4e6',
+    paddingHorizontal: 11,
+    paddingVertical: 7,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  actionOptionChipSelected: {
+    borderColor: '#5b6f41',
+    backgroundColor: '#5b6f41',
+  },
+  actionOptionText: {
+    color: colors.softText,
+    fontFamily: Platform.select({ ios: 'Inter', default: 'sans-serif' }),
+    fontSize: 12,
+    fontWeight: '800',
+    lineHeight: 16,
+  },
+  actionOptionTextSelected: {
+    color: '#fff8ef',
+  },
   actionInput: {
     minHeight: 50,
     marginTop: 6,
@@ -6846,6 +7544,24 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '500',
     lineHeight: 19,
+  },
+  actionInputLong: {
+    minHeight: 86,
+  },
+  actionOptionalNoteInput: {
+    minHeight: 42,
+    marginTop: 8,
+    borderRadius: 15,
+    borderWidth: 0.8,
+    borderColor: '#e8dcc6',
+    backgroundColor: '#fffaf0',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    color: colors.text,
+    fontFamily: Platform.select({ ios: 'Inter', default: 'sans-serif' }),
+    fontSize: 12,
+    fontWeight: '500',
+    lineHeight: 17,
   },
   actionFeedbackPanel: {
     marginTop: 18,
@@ -6896,6 +7612,30 @@ const styles = StyleSheet.create({
     width: 24,
     height: 24,
   },
+  actionFeedbackButtonIconWrap: {
+    width: 24,
+    height: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  actionDeclineButton: {
+    marginTop: 9,
+    minHeight: 42,
+    borderRadius: 999,
+    borderWidth: 0.8,
+    borderColor: '#e0d4be',
+    backgroundColor: colors.card,
+    paddingHorizontal: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  actionDeclineButtonText: {
+    color: colors.mutedText,
+    fontFamily: Platform.select({ ios: 'Inter', default: 'sans-serif' }),
+    fontSize: 13,
+    fontWeight: '800',
+    lineHeight: 18,
+  },
   actionFeedbackButtonTextSelected: {
     color: '#5b6f41',
   },
@@ -6941,7 +7681,8 @@ const styles = StyleSheet.create({
     borderColor: '#d9c9ae',
     backgroundColor: '#fff8ec',
     paddingHorizontal: 15,
-    paddingVertical: 14,
+    paddingTop: 13,
+    paddingBottom: 12,
     ...shadow,
   },
   actionRewardTopRow: {
@@ -6976,7 +7717,7 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
   actionRewardHeadline: {
-    marginTop: 12,
+    marginTop: 10,
     color: colors.text,
     fontFamily: Platform.select({ ios: 'Georgia', default: 'serif' }),
     fontSize: 20,
@@ -6985,7 +7726,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0,
   },
   actionRewardBody: {
-    marginTop: 7,
+    marginTop: 6,
     color: colors.softText,
     fontFamily: Platform.select({ ios: 'Inter', default: 'sans-serif' }),
     fontSize: 13,
@@ -6993,11 +7734,11 @@ const styles = StyleSheet.create({
     lineHeight: 19,
   },
   actionRewardMemoryRow: {
-    minHeight: 38,
-    marginTop: 12,
+    minHeight: 34,
+    marginTop: 10,
     borderTopWidth: 1,
     borderTopColor: '#eadcc8',
-    paddingTop: 10,
+    paddingTop: 9,
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
@@ -7019,6 +7760,71 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
     overflow: 'visible',
     ...shadow,
+  },
+  actionOfferCard: {
+    width: '100%',
+    marginTop: 10,
+    borderRadius: 18,
+    borderWidth: 0.8,
+    borderColor: '#d7dfbd',
+    backgroundColor: '#eef2e2',
+    paddingHorizontal: 15,
+    paddingVertical: 14,
+    gap: 11,
+  },
+  actionOfferCopy: {
+    gap: 3,
+  },
+  actionOfferText: {
+    color: colors.text,
+    fontFamily: Platform.select({ ios: 'Inter', default: 'sans-serif' }),
+    fontSize: 14,
+    fontWeight: '600',
+    lineHeight: 20,
+  },
+  actionOfferMeta: {
+    color: colors.mutedText,
+    fontFamily: Platform.select({ ios: 'Inter', default: 'sans-serif' }),
+    fontSize: 12,
+    lineHeight: 17,
+  },
+  actionOfferButtonRow: {
+    flexDirection: 'row',
+    gap: 9,
+  },
+  actionOfferShowButton: {
+    flex: 1,
+    minHeight: 40,
+    borderRadius: 999,
+    backgroundColor: '#5b6f41',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+  },
+  actionOfferShowButtonText: {
+    color: '#fdf9f0',
+    fontFamily: Platform.select({ ios: 'Inter', default: 'sans-serif' }),
+    fontSize: 13,
+    fontWeight: '800',
+    lineHeight: 18,
+  },
+  actionOfferDeclineButton: {
+    flex: 1,
+    minHeight: 40,
+    borderRadius: 999,
+    borderWidth: 0.8,
+    borderColor: '#d7dfbd',
+    backgroundColor: colors.card,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+  },
+  actionOfferDeclineButtonText: {
+    color: colors.mutedText,
+    fontFamily: Platform.select({ ios: 'Inter', default: 'sans-serif' }),
+    fontSize: 13,
+    fontWeight: '800',
+    lineHeight: 18,
   },
   actionGreenHeader: {
     height: 128,
@@ -7170,18 +7976,29 @@ const styles = StyleSheet.create({
     borderColor: '#e8dcc6',
     backgroundColor: '#fff8ec',
     paddingHorizontal: 14,
-    paddingVertical: 6,
+    paddingVertical: 8,
     ...shadow,
   },
+  recentActionsEmptyText: {
+    paddingVertical: 14,
+    paddingHorizontal: 2,
+    color: colors.mutedText,
+    fontFamily: Platform.select({ ios: 'Inter', default: 'sans-serif' }),
+    fontSize: 13,
+    fontWeight: '600',
+    lineHeight: 19,
+  },
   recentActionRow: {
-    minHeight: 64,
+    minHeight: 74,
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     position: 'relative',
+    paddingVertical: 8,
   },
   recentActionIconWrap: {
     width: 42,
     height: 42,
+    marginTop: 2,
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -7249,12 +8066,12 @@ const styles = StyleSheet.create({
     lineHeight: 15,
   },
   whatHelpedLoopText: {
-    marginTop: 5,
+    marginTop: 4,
     color: colors.mutedText,
     fontFamily: Platform.select({ ios: 'Inter', default: 'sans-serif' }),
     fontSize: 11,
     fontWeight: '600',
-    lineHeight: 15,
+    lineHeight: 14,
   },
   recentActionDots: {
     marginTop: 7,
@@ -7285,6 +8102,7 @@ const styles = StyleSheet.create({
     width: '100%',
     minHeight: 66,
     marginTop: 32,
+    marginBottom: 38,
     borderRadius: 20,
     borderWidth: 0.7,
     borderColor: '#e8dcc6',
@@ -8023,6 +8841,46 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
     lineHeight: 19,
+  },
+  safetyResourceList: {
+    marginTop: 10,
+    gap: 8,
+  },
+  safetyResourceRow: {
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#d9e3c8',
+    backgroundColor: '#f4f7ec',
+    paddingHorizontal: 13,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  safetyResourceCopy: {
+    flex: 1,
+  },
+  safetyResourceLabel: {
+    color: colors.softText,
+    fontFamily: Platform.select({ ios: 'Inter', default: 'sans-serif' }),
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 18,
+  },
+  safetyResourceNote: {
+    marginTop: 1,
+    color: colors.mutedText,
+    fontFamily: Platform.select({ ios: 'Inter', default: 'sans-serif' }),
+    fontSize: 11,
+    fontWeight: '600',
+    lineHeight: 15,
+  },
+  safetyResourceContact: {
+    color: '#5b6f41',
+    fontFamily: Platform.select({ ios: 'Inter', default: 'sans-serif' }),
+    fontSize: 15,
+    fontWeight: '700',
+    letterSpacing: 0.3,
   },
   draftReviewMascotWrap: {
     height: 60,

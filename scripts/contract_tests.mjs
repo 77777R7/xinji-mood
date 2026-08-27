@@ -26,6 +26,7 @@ require.extensions['.ts'] = (module, filename) => {
 };
 
 const {
+  applyPatternFeedbackToRuleState,
   buildBodySignalDaysFromTraces,
   buildBodySignalSummary,
   buildFinalTraceResultFromReview,
@@ -33,14 +34,18 @@ const {
   buildLoopSignaturesFromTraces,
   buildMoodTraceRecord,
   buildNormalizedTraceFields,
+  buildPatternFeedbackState,
   buildWeeklyReflectionPreview,
   createActionMemoryEntry,
+  createPatternFeedbackEntry,
   getConfirmedBodySignalLabels,
   getActionFeedbackSignal,
   getLoopIdentityKey,
   getLoopPatternRuleState,
+  LOOP_PATTERN_WINDOW_DAYS,
   getWeeklyInsightMode,
   hydrateActionMemoryEntry,
+  hydratePatternFeedbackEntry,
 } = require('../src/trace/dataFoundation.ts');
 
 const {
@@ -129,7 +134,27 @@ actionDefinitions.forEach((action) => {
     assert.ok(step.prompt, `${action.id} step ${step.key} should have a prompt`);
     assert.ok(step.detailPrompt, `${action.id} step ${step.key} should have a detail prompt`);
     assert.ok(step.placeholder, `${action.id} step ${step.key} should have a placeholder`);
-    assert.ok(['short_text', 'long_text', 'single_choice', 'none'].includes(step.inputKind));
+    assert.ok(
+      ['short_text', 'long_text', 'single_choice', 'multi_choice', 'none'].includes(step.inputKind),
+      `${action.id} step ${step.key} has unknown input kind: ${step.inputKind}`,
+    );
+    if (['single_choice', 'multi_choice', 'none'].includes(step.inputKind)) {
+      assert.ok(
+        Array.isArray(step.options) && step.options.length > 0,
+        `${action.id} step ${step.key} should provide options for tap-first input`,
+      );
+      step.options.forEach((option) => {
+        assert.ok(option.id, `${action.id} step ${step.key} option should have an id`);
+        assert.ok(option.label, `${action.id} step ${step.key} option ${option.id} should have a label`);
+      });
+    }
+    if (step.allowOptionalNote) {
+      assert.notEqual(
+        step.inputKind,
+        'long_text',
+        `${action.id} step ${step.key} should not pair optional notes with long text`,
+      );
+    }
     assert.equal(typeof step.optional, 'boolean', `${action.id} step ${step.key} should declare optional`);
     assert.ok(step.imageKey || step.icon, `${action.id} step ${step.key} should have an image key or icon`);
   });
@@ -191,6 +216,20 @@ actionDefinitions.forEach((action) => {
     `${action.id} weekly copy should avoid system-log, generic praise, and clinical claims`,
   );
 });
+
+const bodyScanSteps = getActionDefinition('body-scan').steps;
+assert.deepEqual(
+  bodyScanSteps.map((step) => step.inputKind),
+  ['none', 'single_choice', 'single_choice'],
+  'Body Scan should be tap-first: breath done, body choice, soften choice',
+);
+assert.ok(
+  bodyScanSteps.every((step) => step.allowOptionalNote),
+  'Body Scan should keep writing optional on every step',
+);
+assert.equal(getActionDefinition('tiny-next-step').steps[0].inputKind, 'single_choice');
+assert.equal(getActionDefinition('tiny-next-step').steps[2].key, 'first_30_seconds');
+assert.equal(getActionDefinition('kind-reframe').title, 'Say It Less Harshly');
 
 const dataFoundationSource = readFileSync(require.resolve('../src/trace/dataFoundation.ts'), 'utf8');
 assert.match(
@@ -359,12 +398,25 @@ assert.equal(
   'high safety trace should not enter pattern aggregation',
 );
 
-const learningPatternState = getLoopPatternRuleState(loopSignatures[0], savedTraces.slice(0, 2));
+// The loop window is anchored on "today", so fixtures need a fixed reference day.
+const patternReferenceIso = '2026-06-19T12:00:00.000Z';
+
+const learningPatternState = getLoopPatternRuleState(
+  loopSignatures[0],
+  savedTraces.slice(0, 2),
+  LOOP_PATTERN_WINDOW_DAYS,
+  patternReferenceIso,
+);
 assert.equal(learningPatternState.status, 'learning');
 assert.equal(learningPatternState.canShowLoop, false);
 assert.equal(learningPatternState.canShowLoopAction, false);
 
-const possibleThreadPatternState = getLoopPatternRuleState(loopSignatures[0], savedTraces);
+const possibleThreadPatternState = getLoopPatternRuleState(
+  loopSignatures[0],
+  savedTraces,
+  LOOP_PATTERN_WINDOW_DAYS,
+  patternReferenceIso,
+);
 assert.equal(possibleThreadPatternState.status, 'possible_thread');
 assert.equal(possibleThreadPatternState.canShowLoop, true);
 assert.equal(possibleThreadPatternState.canShowLoopAction, false);
@@ -424,10 +476,12 @@ const similarTraceC = buildMoodTraceRecord({
   savedAt: '2026-06-16T09:00:00.000Z',
   safetyAssessment: lowServerSafety,
 });
-const actionReadyPatternState = getLoopPatternRuleState(loopSignatures[0], [
-  ...savedTraces,
-  similarTraceC,
-]);
+const actionReadyPatternState = getLoopPatternRuleState(
+  loopSignatures[0],
+  [...savedTraces, similarTraceC],
+  LOOP_PATTERN_WINDOW_DAYS,
+  patternReferenceIso,
+);
 assert.equal(actionReadyPatternState.status, 'possible_loop');
 assert.equal(actionReadyPatternState.canShowLoop, true);
 assert.equal(actionReadyPatternState.canShowLoopAction, true);
@@ -450,6 +504,200 @@ assert.equal(
   }),
   'lighter_loop',
 );
+
+// Pattern feedback contract (mvp-data-contract UserPatternFeedback).
+const feedbackChainKey = loopSignatures[0].chainKey;
+
+const confirmEntry = createPatternFeedbackEntry({
+  chainKey: feedbackChainKey,
+  traceId: savedTraces[0].id,
+  rating: 'feels_right',
+  mismatchReason: 'context_mismatch',
+  createdAt: '2026-06-19T10:00:00.000Z',
+});
+assert.equal(confirmEntry.schemaVersion, 1, 'feedback entry should stamp the schema version');
+assert.equal(confirmEntry.mismatchReason, null, 'feels_right should never keep a mismatch reason');
+
+const emptyFeedbackState = buildPatternFeedbackState([], feedbackChainKey, null);
+assert.equal(emptyFeedbackState.status, 'none');
+assert.equal(emptyFeedbackState.canPromptAgain, true, 'no feedback yet should keep the prompt visible');
+
+const confirmedState = buildPatternFeedbackState([confirmEntry], feedbackChainKey, null);
+assert.equal(confirmedState.status, 'confirmed');
+assert.equal(confirmedState.confirmCount, 1);
+assert.equal(confirmedState.canPromptAgain, false, 'confirmed loops should not re-ask');
+
+const confirmedRuleState = applyPatternFeedbackToRuleState(possibleThreadPatternState, confirmedState);
+assert.equal(confirmedRuleState.status, 'possible_loop', 'confirmation should escalate a visible thread');
+assert.equal(confirmedRuleState.canShowLoopAction, true, 'confirmation should unlock the loop action at 3 traces');
+
+const learningRuleState = getLoopPatternRuleState(
+  loopSignatures[0],
+  savedTraces.slice(0, 2),
+  LOOP_PATTERN_WINDOW_DAYS,
+  patternReferenceIso,
+);
+const confirmedLearningState = applyPatternFeedbackToRuleState(learningRuleState, confirmedState);
+assert.equal(confirmedLearningState.canShowLoop, false, 'confirmation must not surface a loop without evidence');
+assert.equal(confirmedLearningState.canShowLoopAction, false);
+
+const mildNotQuite = createPatternFeedbackEntry({
+  chainKey: feedbackChainKey,
+  rating: 'not_quite',
+  mismatchReason: 'feeling_mismatch',
+  createdAt: '2026-06-19T10:00:00.000Z',
+});
+const watchingState = buildPatternFeedbackState([mildNotQuite], feedbackChainKey, '2026-06-18T09:00:00.000Z');
+assert.equal(watchingState.status, 'watching', 'a single mild correction should keep watching');
+assert.equal(watchingState.canPromptAgain, false, 'no re-ask until new evidence arrives');
+assert.equal(
+  applyPatternFeedbackToRuleState(possibleThreadPatternState, watchingState).canShowLoop,
+  true,
+  'watching should not hide the loop',
+);
+
+const secondNotQuite = createPatternFeedbackEntry({
+  chainKey: feedbackChainKey,
+  rating: 'not_quite',
+  mismatchReason: 'context_mismatch',
+  createdAt: '2026-06-20T10:00:00.000Z',
+});
+const cooldownState = buildPatternFeedbackState(
+  [mildNotQuite, secondNotQuite],
+  feedbackChainKey,
+  '2026-06-18T09:00:00.000Z',
+);
+assert.equal(cooldownState.status, 'cooldown', 'two consecutive corrections should cool the loop down');
+assert.equal(cooldownState.consecutiveNotQuite, 2);
+const cooledRuleState = applyPatternFeedbackToRuleState(actionReadyPatternState, cooldownState);
+assert.equal(cooledRuleState.status, 'learning', 'cooldown should fall back to the learning card');
+assert.equal(cooledRuleState.canShowLoop, false);
+assert.equal(cooledRuleState.canShowLoopAction, false);
+
+const hardReject = createPatternFeedbackEntry({
+  chainKey: feedbackChainKey,
+  rating: 'not_quite',
+  mismatchReason: 'not_a_pattern',
+  createdAt: '2026-06-19T10:00:00.000Z',
+});
+assert.equal(
+  buildPatternFeedbackState([hardReject], feedbackChainKey, '2026-06-18T09:00:00.000Z').status,
+  'cooldown',
+  'a not_a_pattern answer should cool down immediately',
+);
+
+// Hard rejection wears off only with BOTH enough elapsed days AND enough fresh evidence
+// (C6): a single new check-in the next day must not bring the card back.
+const buildRejectEvidenceRecord = (savedAt) =>
+  buildMoodTraceRecord({
+    transcript: 'Work feedback again. Head pressure and I kept thinking it was my fault.',
+    selectedMood: 'Down',
+    selectedBodySignalLabels: ['Head pressure'],
+    traceResult: {
+      chain: ['head_pressure', 'work_feedback', 'self_blame'],
+      bodySignals: [{ key: 'head_pressure', value: 'Head pressure' }],
+      extraction: [
+        { label: 'Body signal', value: 'Head pressure' },
+        { label: 'Context', value: 'Work feedback' },
+        { label: 'Thought', value: 'Self-blame' },
+      ],
+    },
+    createdAt: savedAt,
+    savedAt,
+    safetyAssessment: lowServerSafety,
+  });
+const rejectEvidenceOneDay = buildRejectEvidenceRecord('2026-06-20T09:00:00.000Z');
+const rejectEvidenceTwoDays = buildRejectEvidenceRecord('2026-06-21T09:00:00.000Z');
+const rejectEvidenceThreeDays = buildRejectEvidenceRecord('2026-06-22T09:00:00.000Z');
+
+const rejectOnlyTwoDays = buildPatternFeedbackState(
+  [hardReject],
+  feedbackChainKey,
+  rejectEvidenceTwoDays.savedAt,
+  [rejectEvidenceTwoDays],
+);
+assert.equal(
+  rejectOnlyTwoDays.status,
+  'cooldown',
+  'hard rejection should not reopen on a single fresh trace even days later',
+);
+
+const rejectTooSoon = buildPatternFeedbackState(
+  [hardReject],
+  feedbackChainKey,
+  rejectEvidenceOneDay.savedAt,
+  [rejectEvidenceOneDay, rejectEvidenceTwoDays, rejectEvidenceThreeDays],
+);
+assert.equal(
+  rejectTooSoon.status,
+  'cooldown',
+  'three fresh traces should not reopen a hard rejection before the cooldown days pass',
+);
+
+const rejectReopened = buildPatternFeedbackState(
+  [hardReject],
+  feedbackChainKey,
+  rejectEvidenceThreeDays.savedAt,
+  [rejectEvidenceOneDay, rejectEvidenceTwoDays, rejectEvidenceThreeDays],
+);
+assert.equal(
+  rejectReopened.status,
+  'watching',
+  'hard rejection should reopen once cooldown AND 3 fresh records both pass',
+);
+assert.equal(rejectReopened.canPromptAgain, true, 'reopened loop should allow asking again');
+
+const rejectPreRejectionEvidenceIgnored = buildPatternFeedbackState(
+  [hardReject],
+  feedbackChainKey,
+  rejectEvidenceThreeDays.savedAt,
+  [similarTraceA, similarTraceB, rejectEvidenceOneDay, rejectEvidenceTwoDays, rejectEvidenceThreeDays],
+);
+assert.equal(
+  rejectPreRejectionEvidenceIgnored.status,
+  'watching',
+  'only records saved after the rejection should count toward the threshold',
+);
+
+const reopenedState = buildPatternFeedbackState(
+  [mildNotQuite, secondNotQuite],
+  feedbackChainKey,
+  '2026-06-21T09:00:00.000Z',
+);
+assert.equal(reopenedState.status, 'watching', 'new evidence after a cooldown should reopen the loop');
+assert.equal(reopenedState.canPromptAgain, true, 'new evidence should allow asking again');
+
+const confirmAfterCorrection = buildPatternFeedbackState(
+  [mildNotQuite, createPatternFeedbackEntry({
+    chainKey: feedbackChainKey,
+    rating: 'feels_right',
+    createdAt: '2026-06-21T10:00:00.000Z',
+  })],
+  feedbackChainKey,
+  null,
+);
+assert.equal(confirmAfterCorrection.status, 'confirmed', 'a later confirmation should win over old corrections');
+assert.equal(confirmAfterCorrection.consecutiveNotQuite, 0);
+
+assert.equal(
+  buildPatternFeedbackState([confirmEntry], 'another|chain|key', null).status,
+  'none',
+  'feedback must stay scoped to its chain key',
+);
+
+assert.equal(hydratePatternFeedbackEntry({ chainKey: feedbackChainKey, rating: 'nonsense' }), null);
+assert.equal(hydratePatternFeedbackEntry({ rating: 'feels_right' }), null);
+const hydratedLegacyFeedback = hydratePatternFeedbackEntry({
+  chainKey: feedbackChainKey,
+  rating: 'not_quite',
+  mismatchReason: 'not_a_valid_reason',
+  createdAt: '2026-06-19T10:00:00.000Z',
+});
+assert.equal(hydratedLegacyFeedback.schemaVersion, 1, 'hydration should backfill the schema version');
+assert.equal(hydratedLegacyFeedback.mismatchReason, null, 'hydration should drop unknown mismatch reasons');
+assert.equal(typeof hydratedLegacyFeedback.id, 'string');
+
+console.log('OK: pattern feedback contract is stable.');
 assert.equal(
   getWeeklyInsightMode({
     patternRule: actionReadyPatternState,

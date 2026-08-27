@@ -258,17 +258,35 @@ export type ActionDefinitionV1 = {
 ### ActionStepDefinitionV1
 
 ```ts
+export type ActionStepOptionV1 = {
+  id: string;
+  label: string;
+  value?: string;
+  followupPlaceholder?: string;
+};
+
 export type ActionStepDefinitionV1 = {
   key: string;
   title: string;
   prompt: string;
   detailPrompt: string;
   placeholder: string;
-  inputKind: 'short_text' | 'long_text' | 'single_choice' | 'none';
+  inputKind:
+    | 'short_text'
+    | 'long_text'
+    | 'single_choice'
+    | 'multi_choice'
+    | 'none';
+  options?: ActionStepOptionV1[];
+  allowOptionalNote?: boolean;
   optional: boolean;
   imageKey: string | null;
 };
 ```
+
+Tap-first rule: an action should be completable through choices or a done tap
+whenever possible. Text entry is still allowed, but it should usually be an
+optional note rather than the primary requirement.
 
 ### ActionRecommendationV1
 
@@ -410,7 +428,22 @@ export type HelpfulnessMemoryV1 = {
 | `name-loop` | `labeling` | `name_loop` | `very_low` | daily, possible thread, possible loop, after too much | `loop_labeling` | `named_it` |
 | `tiny-next-step` | `behavioral` | `tiny_next_step` | `low` | daily, possible loop, micro-win follow-up | `behavioral_nudge` | `noticed` |
 | `evening-unload` | `reflection` | `unload` | `medium` | daily, familiar loop | `evening_release` | `parked` |
-| `kind-reframe` | `self_compassion` | `reframe` | `low` | daily, possible loop, familiar loop | `self_compassion` | `kind_shift` |
+| `kind-reframe` / `Say It Less Harshly` | `self_compassion` | `reframe` | `low` | daily, possible loop, familiar loop | `self_compassion` | `kind_shift` |
+
+## Tap-First V1 Step Standard
+
+The current MVP action library keeps the six canonical ids and upgrades their
+interaction burden:
+
+- `body-scan`: done tap -> body-location choice -> soften choice.
+- `fact-guess-worry-split`: still text-based for now, but each field is short
+  and prepared for future Rora prefill / confirm-edit behavior.
+- `name-loop`: pattern piece choice -> loop nickname choice -> early cue choice.
+- `tiny-next-step`: direction choice -> tiny version text -> first 30 seconds.
+- `evening-unload`: open-tab choice -> parking-place choice -> stopping-line
+  choice.
+- `kind-reframe`: less harsh display copy while preserving the stable
+  `kind-reframe` id for old memories.
 
 ## Recommendation Standard
 

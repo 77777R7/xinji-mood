@@ -325,7 +325,28 @@ const selfHarmKeywords = [
   "don't want to live",
   'cant go on',
   "can't go on",
+  '自杀',
+  '轻生',
+  '自残',
+  '伤害自己',
+  '结束生命',
+  '结束自己',
+  '了结自己',
+  '一了百了',
+  '不想活',
+  '活不下去',
+  '不想活了',
+  '活着没意思',
+  '活着没意义',
+  '死了算了',
+  '想不开',
+  '撑不下去',
+  '挺不下去',
+  '想死',
 ];
+
+// "累得想死" / "疼的想死" are degree complements, not crisis language.
+const selfHarmColloquialPattern = /[得的]\s*想死/;
 
 const severeDistressKeywords = [
   'hopeless',
@@ -335,6 +356,16 @@ const severeDistressKeywords = [
   'spiraling',
   'cannot cope',
   "can't cope",
+  '绝望',
+  '崩溃',
+  '恐慌',
+  '惊恐',
+  '受不了了',
+  '撑不住了',
+  '承受不了',
+  '无法承受',
+  '喘不过气',
+  '不安全',
 ];
 
 const urgentMedicalKeywords = [
@@ -345,6 +376,16 @@ const urgentMedicalKeywords = [
   'short of breath',
   'numb',
   'emergency',
+  '突然',
+  '剧烈',
+  '压榨',
+  '呼吸困难',
+  '喘不上气',
+  '发麻',
+  '晕倒',
+  '昏倒',
+  '急诊',
+  '胸痛',
 ];
 
 const helpfulnessOutcomeLabels: Record<ActionHelpfulnessSignal, string> = {
@@ -367,6 +408,14 @@ function makeId(prefix: string, timestamp: string) {
 
 function includesAny(text: string, keywords: string[]) {
   return keywords.some((keyword) => text.includes(keyword));
+}
+
+function hasSelfHarmLanguage(text: string) {
+  if (selfHarmColloquialPattern.test(text)) {
+    return includesAny(text.replace(selfHarmColloquialPattern, ''), selfHarmKeywords);
+  }
+
+  return includesAny(text, selfHarmKeywords);
 }
 
 function getPlainTraceLabel(key: TraceIconKey) {
@@ -514,10 +563,12 @@ export function assessMoodSafety({
     ...selectedBodySignalLabels,
     ...bodySignals.map((signal) => signal.value),
   ].map((label) => label.toLowerCase());
-  const hasChestSignal = allBodyLabels.some((label) => label.includes('chest'));
+  const hasChestSignal = allBodyLabels.some(
+    (label) => label.includes('chest') || label.includes('胸'),
+  );
   const flags: SafetyFlag[] = [];
 
-  if (includesAny(normalizedTranscript, selfHarmKeywords)) {
+  if (hasSelfHarmLanguage(normalizedTranscript)) {
     flags.push({
       key: 'self_harm_language',
       label: 'Crisis language',
@@ -910,10 +961,13 @@ function getDayDistance(laterIsoDate: string, earlierIsoDate: string) {
   return Math.abs(Math.round((laterDay - earlierDay) / (24 * 60 * 60 * 1000)));
 }
 
+export const LOOP_PATTERN_WINDOW_DAYS = 5;
+
 export function getLoopPatternRuleState(
   loopSignature: LoopSignature | null,
   traceRecords: MoodTraceRecord[],
-  windowDays = 5,
+  windowDays = LOOP_PATTERN_WINDOW_DAYS,
+  referenceIso = new Date().toISOString(),
 ): LoopPatternRuleState {
   if (!loopSignature) {
     return {
@@ -944,9 +998,10 @@ export function getLoopPatternRuleState(
     };
   }
 
-  const latestIso = getTraceRecordIso(matchingRecords[0]);
+  // Anchor on the reference day, not the newest trace, so "Last N days" stays literally true
+  // after a gap in check-ins instead of resurfacing a stale loop.
   const recentRecords = matchingRecords.filter(
-    (record) => getDayDistance(latestIso, getTraceRecordIso(record)) <= windowDays,
+    (record) => getDayDistance(referenceIso, getTraceRecordIso(record)) < windowDays,
   );
   const recentDayCount = new Set(recentRecords.map((record) => getIsoDayKey(getTraceRecordIso(record)))).size;
   const canShowLoop = recentRecords.length >= 3 && recentDayCount >= 2;
@@ -960,6 +1015,198 @@ export function getLoopPatternRuleState(
     dayCount: recentDayCount,
     windowDays,
   };
+}
+
+export type PatternFeedbackRating = 'feels_right' | 'not_quite';
+export type PatternFeedbackMismatchReason = 'context_mismatch' | 'feeling_mismatch' | 'not_a_pattern';
+export type PatternFeedbackStatus = 'none' | 'confirmed' | 'watching' | 'cooldown';
+
+export type PatternFeedbackEntry = {
+  schemaVersion: number;
+  id: string;
+  chainKey: string;
+  traceId: string | null;
+  rating: PatternFeedbackRating;
+  mismatchReason: PatternFeedbackMismatchReason | null;
+  createdAt: string;
+};
+
+export type PatternFeedbackState = {
+  status: PatternFeedbackStatus;
+  confirmCount: number;
+  notQuiteCount: number;
+  consecutiveNotQuite: number;
+  lastMismatchReason: PatternFeedbackMismatchReason | null;
+  lastFeedbackAt: string | null;
+  canPromptAgain: boolean;
+};
+
+const patternFeedbackRatings: PatternFeedbackRating[] = ['feels_right', 'not_quite'];
+const patternFeedbackMismatchReasons: PatternFeedbackMismatchReason[] = [
+  'context_mismatch',
+  'feeling_mismatch',
+  'not_a_pattern',
+];
+
+// A hard "this isn't a pattern" rejection needs BOTH this many new saved traces for the
+// same chain AND this many elapsed days before Rora will quietly start watching again.
+const HARD_REJECT_EVIDENCE_THRESHOLD = 3;
+const HARD_REJECT_COOLDOWN_DAYS = 2;
+
+export function createPatternFeedbackEntry({
+  chainKey,
+  traceId = null,
+  rating,
+  mismatchReason = null,
+  createdAt = new Date().toISOString(),
+}: {
+  chainKey: string;
+  traceId?: string | null;
+  rating: PatternFeedbackRating;
+  mismatchReason?: PatternFeedbackMismatchReason | null;
+  createdAt?: string;
+}): PatternFeedbackEntry {
+  return {
+    schemaVersion: MOOD_DATA_SCHEMA_VERSION,
+    id: makeId(`pattern-feedback-${rating}`, createdAt),
+    chainKey,
+    traceId,
+    rating,
+    mismatchReason: rating === 'not_quite' ? mismatchReason : null,
+    createdAt,
+  };
+}
+
+export function hydratePatternFeedbackEntry(entry: PatternFeedbackEntry): PatternFeedbackEntry | null {
+  if (!entry || typeof entry.chainKey !== 'string' || !entry.chainKey) {
+    return null;
+  }
+
+  if (!patternFeedbackRatings.includes(entry.rating)) {
+    return null;
+  }
+
+  const mismatchReason =
+    entry.rating === 'not_quite' && patternFeedbackMismatchReasons.includes(entry.mismatchReason as PatternFeedbackMismatchReason)
+      ? entry.mismatchReason
+      : null;
+
+  return {
+    schemaVersion: entry.schemaVersion || MOOD_DATA_SCHEMA_VERSION,
+    id: entry.id || makeId(`pattern-feedback-${entry.rating}`, entry.createdAt || new Date().toISOString()),
+    chainKey: entry.chainKey,
+    traceId: entry.traceId || null,
+    rating: entry.rating,
+    mismatchReason,
+    createdAt: entry.createdAt || new Date().toISOString(),
+  };
+}
+
+export function buildPatternFeedbackState(
+  entries: PatternFeedbackEntry[],
+  chainKey: string | null,
+  latestEvidenceAt: string | null = null,
+  loopEvidenceRecords: MoodTraceRecord[] = [],
+): PatternFeedbackState {
+  const emptyState: PatternFeedbackState = {
+    status: 'none',
+    confirmCount: 0,
+    notQuiteCount: 0,
+    consecutiveNotQuite: 0,
+    lastMismatchReason: null,
+    lastFeedbackAt: null,
+    canPromptAgain: true,
+  };
+
+  if (!chainKey) {
+    return emptyState;
+  }
+
+  const matchingEntries = entries
+    .filter((entry) => entry.chainKey === chainKey)
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+
+  if (matchingEntries.length === 0) {
+    return emptyState;
+  }
+
+  const confirmCount = matchingEntries.filter((entry) => entry.rating === 'feels_right').length;
+  const notQuiteCount = matchingEntries.length - confirmCount;
+
+  let consecutiveNotQuite = 0;
+
+  for (let index = matchingEntries.length - 1; index >= 0; index -= 1) {
+    if (matchingEntries[index].rating !== 'not_quite') {
+      break;
+    }
+
+    consecutiveNotQuite += 1;
+  }
+
+  const lastEntry = matchingEntries[matchingEntries.length - 1];
+  const hasNewEvidence = Boolean(
+    latestEvidenceAt && latestEvidenceAt.localeCompare(lastEntry.createdAt) > 0,
+  );
+
+  let status: PatternFeedbackStatus;
+
+  if (lastEntry.rating === 'feels_right') {
+    status = 'confirmed';
+  } else if (lastEntry.mismatchReason === 'not_a_pattern') {
+    // An explicit "this is not a pattern" is a standing rejection: new evidence for the
+    // same chain is exactly what the user already told Rora to stop reading as a pattern.
+    // The rejection wears off only after a minimum cooldown AND a real re-accumulation
+    // (3 more saved traces on 2+ days), not on any single new check-in.
+    const newEvidenceSinceRejection = loopEvidenceRecords.filter(
+      (record) =>
+        getLoopIdentityKey(record) === chainKey &&
+        getTraceRecordIso(record).localeCompare(lastEntry.createdAt) > 0,
+    ).length;
+    const cooldownElapsed =
+      latestEvidenceAt !== null &&
+      getDayDistance(lastEntry.createdAt, latestEvidenceAt) >= HARD_REJECT_COOLDOWN_DAYS;
+
+    status =
+      cooldownElapsed && newEvidenceSinceRejection >= HARD_REJECT_EVIDENCE_THRESHOLD
+        ? 'watching'
+        : 'cooldown';
+  } else {
+    status = consecutiveNotQuite >= 2 && !hasNewEvidence ? 'cooldown' : 'watching';
+  }
+
+  return {
+    status,
+    confirmCount,
+    notQuiteCount,
+    consecutiveNotQuite,
+    lastMismatchReason: lastEntry.rating === 'not_quite' ? lastEntry.mismatchReason : null,
+    lastFeedbackAt: lastEntry.createdAt,
+    canPromptAgain: status === 'watching' && hasNewEvidence,
+  };
+}
+
+export function applyPatternFeedbackToRuleState(
+  ruleState: LoopPatternRuleState,
+  feedbackState: PatternFeedbackState,
+): LoopPatternRuleState {
+  if (feedbackState.status === 'cooldown') {
+    return {
+      ...ruleState,
+      status: 'learning',
+      canShowLoop: false,
+      canShowLoopAction: false,
+    };
+  }
+
+  if (feedbackState.status === 'confirmed' && ruleState.canShowLoop) {
+    return {
+      ...ruleState,
+      status: 'possible_loop',
+      canShowLoopAction: true,
+    };
+  }
+
+  return ruleState;
 }
 
 export function getBodySignalKeysFromTraceRecord(record: MoodTraceRecord) {
@@ -1235,6 +1482,16 @@ export function createActionMemoryEntry({
   };
 }
 
+export function getHelpfulnessMemoryScore(outcomeCounts: Record<ActionFeedbackSignal, number>) {
+  return outcomeCounts.helped * 2 + outcomeCounts.helped_a_little - outcomeCounts.too_much * 2;
+}
+
+export function isDeprioritizedHelpfulnessMemory(memory: HelpfulnessMemory) {
+  const positiveCount = memory.outcomeCounts.helped + memory.outcomeCounts.helped_a_little;
+
+  return memory.outcomeCounts.did_not_help >= 2 && memory.outcomeCounts.did_not_help > positiveCount;
+}
+
 function getBestOutcomeLabel(outcomeCounts: Record<ActionFeedbackSignal, number>) {
   if (outcomeCounts.helped > 0) {
     return helpfulnessOutcomeLabels.helped;
@@ -1282,7 +1539,20 @@ export function buildHelpfulnessMemory(entries: ActionMemoryEntry[]): Helpfulnes
 
     const bestOutcomeLabel = getBestOutcomeLabel(outcomeCounts);
     const completedEntries = groupEntries.filter((entry) => entry.completionStatus === 'completed');
+    const positiveCompletionCount =
+      outcomeCounts.helped + outcomeCounts.helped_a_little;
     const latestOutcome = getActionFeedbackSignal(latestEntry);
+
+    const recommendationReason =
+      completedEntries.length === 0
+        ? `Rora remembered that ${latestEntry.actionTitle} was skipped when this loop showed up.`
+        : positiveCompletionCount === 0
+        ? `Rora remembered that ${latestEntry.actionTitle} didn't quite land the last few times this loop showed up.`
+        : completedEntries.length === 1
+        ? `Rora remembered that ${latestEntry.actionTitle} ${latestEntry.outcomeLabel.toLowerCase()} last time this loop showed up.`
+        : `Rora has seen ${latestEntry.actionTitle} help this loop ${positiveCompletionCount} ${
+            positiveCompletionCount === 1 ? 'time' : 'times'
+          } since it showed up.`;
 
     return {
       schemaVersion: MOOD_DATA_SCHEMA_VERSION,
@@ -1297,20 +1567,133 @@ export function buildHelpfulnessMemory(entries: ActionMemoryEntry[]): Helpfulnes
       lastOutcome: latestOutcome,
       lastOutcomeLabel: latestEntry.outcomeLabel,
       bestOutcomeLabel,
-      recommendationReason:
-        completedEntries.length === 0
-          ? `Rora remembered that ${latestEntry.actionTitle} was skipped when this loop showed up.`
-          : completedEntries.length === 1
-          ? `Rora remembered that ${latestEntry.actionTitle} ${latestEntry.outcomeLabel.toLowerCase()} last time this loop showed up.`
-          : `Rora has seen ${latestEntry.actionTitle} help this loop ${completedEntries.length} times. Best signal: ${bestOutcomeLabel.toLowerCase()}.`,
+      recommendationReason,
     };
   });
 }
 
+export type ActionEffectFollowUp = {
+  actionId: string;
+  actionTitle: string;
+  chainKey: string;
+  completedAt: string;
+  // 'recurred': the same loop showed up again after the action; 'stayed_quiet': it has not,
+  // and enough post-action saved traces exist to honestly say so.
+  outcome: 'recurred' | 'stayed_quiet';
+  daysAfterAction: number;
+  sentence: string;
+};
+
+// How many calendar days of saved traces are needed after a completed action before Rora
+// may honestly say the loop "has not shown up again". Below this, silence — not a claim.
+const ACTION_FOLLOW_UP_QUIET_DAYS = 2;
+const ACTION_FOLLOW_UP_QUIET_TRACES = 2;
+// A follow-up older than this is stale — the user has moved on, stop repeating it.
+const ACTION_FOLLOW_UP_MAX_AGE_DAYS = 7;
+
+// C2: after the user last completed an action for a loop, compare when (or whether) that
+// same chain showed up again in saved traces. Returns one honest, descriptive sentence —
+// recurrence is stated as an observation, never as proof the action worked or failed.
+export function buildActionEffectFollowUp({
+  actionMemoryEntries,
+  traceRecords,
+  loopSignatures = [],
+}: {
+  actionMemoryEntries: ActionMemoryEntry[];
+  traceRecords: MoodTraceRecord[];
+  loopSignatures?: LoopSignature[];
+}): ActionEffectFollowUp | null {
+  const latestCompleted = [...actionMemoryEntries]
+    .filter((entry) => entry.completionStatus === 'completed')
+    .sort((left, right) => right.completedAt.localeCompare(left.completedAt))[0];
+
+  if (!latestCompleted) {
+    return null;
+  }
+
+  const chainKey = latestCompleted.chainKey;
+  const signature = loopSignatures.find((candidate) => candidate.chainKey === chainKey) || null;
+  const loopPhrase = signature?.primaryTriggerKey
+    ? `the ${getPlainTraceLabel(signature.primaryTriggerKey).toLowerCase()} loop`
+    : 'this loop';
+
+  const tracesAfterAction = traceRecords
+    .filter((record) => getTraceRecordIso(record).localeCompare(latestCompleted.completedAt) > 0)
+    .sort((left, right) => getTraceRecordIso(left).localeCompare(getTraceRecordIso(right)));
+
+  if (tracesAfterAction.length === 0) {
+    return null;
+  }
+
+  // Staleness is anchored to the newest saved trace, not the wall clock, so the
+  // check stays deterministic and testable.
+  const latestTraceIso = getTraceRecordIso(tracesAfterAction[tracesAfterAction.length - 1]);
+
+  const firstRecurrence = tracesAfterAction.find(
+    (record) => getLoopIdentityKey(record) === chainKey,
+  );
+
+  if (firstRecurrence) {
+    const recurrenceIso = getTraceRecordIso(firstRecurrence);
+
+    // A recurrence the user has long since traced past is old news — stop repeating it.
+    if (getDayDistance(latestTraceIso, recurrenceIso) > ACTION_FOLLOW_UP_MAX_AGE_DAYS) {
+      return null;
+    }
+
+    const daysAfterAction = getDayDistance(recurrenceIso, latestCompleted.completedAt);
+    const whenPhrase =
+      daysAfterAction === 0
+        ? 'later the same day'
+        : daysAfterAction === 1
+        ? 'the next day'
+        : `${daysAfterAction} days later`;
+
+    return {
+      actionId: latestCompleted.actionId,
+      actionTitle: latestCompleted.actionTitle,
+      chainKey,
+      completedAt: latestCompleted.completedAt,
+      outcome: 'recurred',
+      daysAfterAction,
+      sentence: `${capitalizeSentence(loopPhrase)} came back ${whenPhrase} after you tried ${latestCompleted.actionTitle}.`,
+    };
+  }
+
+  const quietDays = getDayDistance(latestTraceIso, latestCompleted.completedAt);
+
+  // Too soon (or too little saved) to claim anything — one quiet day is silence, not
+  // evidence. And past the max age the loop is old news; stop bringing it up.
+  if (
+    quietDays < ACTION_FOLLOW_UP_QUIET_DAYS ||
+    quietDays > ACTION_FOLLOW_UP_MAX_AGE_DAYS ||
+    tracesAfterAction.length < ACTION_FOLLOW_UP_QUIET_TRACES
+  ) {
+    return null;
+  }
+
+  return {
+    actionId: latestCompleted.actionId,
+    actionTitle: latestCompleted.actionTitle,
+    chainKey,
+    completedAt: latestCompleted.completedAt,
+    outcome: 'stayed_quiet',
+    daysAfterAction: quietDays,
+    sentence: `Since you tried ${latestCompleted.actionTitle}, ${loopPhrase} has not shown up in ${quietDays} days of saved traces.`,
+  };
+}
+
 function getBestHelpfulnessMemory(memories: HelpfulnessMemory[]) {
   return [...memories].sort((left, right) => {
-    const leftPositiveCount = left.outcomeCounts.helped * 2 + left.outcomeCounts.helped_a_little;
-    const rightPositiveCount = right.outcomeCounts.helped * 2 + right.outcomeCounts.helped_a_little;
+    const leftDeprioritized = isDeprioritizedHelpfulnessMemory(left);
+    const rightDeprioritized = isDeprioritizedHelpfulnessMemory(right);
+
+    if (leftDeprioritized !== rightDeprioritized) {
+      return leftDeprioritized ? 1 : -1;
+    }
+
+    const leftPositiveCount = getHelpfulnessMemoryScore(left.outcomeCounts);
+    const rightPositiveCount = getHelpfulnessMemoryScore(right.outcomeCounts);
 
     if (rightPositiveCount !== leftPositiveCount) {
       return rightPositiveCount - leftPositiveCount;
@@ -1608,7 +1991,12 @@ export function buildWeeklyReflectionFacts({
         .map((record) => record.id)
     : [];
   const actionLearning = getWeeklyActionLearning(weeklyActionMemory);
-  const patternRule = getLoopPatternRuleState(primaryLoop, weeklyTraceRecords);
+  const patternRule = getLoopPatternRuleState(
+    primaryLoop,
+    weeklyTraceRecords,
+    LOOP_PATTERN_WINDOW_DAYS,
+    safeReferenceDate.toISOString(),
+  );
   const insightMode = getWeeklyInsightMode({
     patternRule,
     actionLearningStatus: actionLearning.status,

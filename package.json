@@ -11,7 +11,7 @@
     "web": "expo start --web",
     "web:8083": "node scripts/serve_web_8083.mjs",
     "check:web:8083": "node scripts/check_web_8083.mjs",
-    "test:contract": "node scripts/contract_tests.mjs",
+    "test:contract": "node scripts/contract_tests.mjs && node scripts/logic_fix_tests.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

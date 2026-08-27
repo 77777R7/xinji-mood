@@ -109,12 +109,12 @@ export const rewardStampCopy: Record<ActionRewardStamp, RewardStampCopy> = {
     tooMuchBody: 'Rora can keep evening steps shorter next time.',
   },
   kind_shift: {
-    badge: 'Kinder',
-    helpedHeadline: 'You tried a kinder sentence.',
-    helpedALittleHeadline: 'You noticed what kindness could reach today.',
-    didNotHelpHeadline: 'Rora learned kindness may not feel reachable yet.',
+    badge: 'Less harsh',
+    helpedHeadline: 'You tried saying it less harshly.',
+    helpedALittleHeadline: 'You noticed what felt a little less attacking.',
+    didNotHelpHeadline: 'Rora learned a less harsh line may not fit yet.',
     tooMuchHeadline: 'Reframing asked too much today.',
-    positiveBody: 'Rora can remember this gently, without forcing it next time.',
+    positiveBody: 'Rora can remember the honest part without turning it into pressure.',
     didNotHelpBody: 'This is useful feedback about what feels honest.',
     tooMuchBody: 'Rora can start by naming what showed up, without reframing it.',
   },
@@ -155,7 +155,7 @@ export const weeklyRoleCopy: Record<ActionWeeklyReflectionRole, WeeklyRoleCopy> 
     bottomRowDetail: () => 'Rora can keep this as a nighttime release option.',
   },
   self_compassion: {
-    headline: 'The self-talk softened a little.',
+    headline: 'The self-talk got a little less harsh.',
     summary: ({ actionTitle, threadText }) =>
       `${threadText}, but ${actionTitle} helped keep the truth without turning it into punishment.`,
     bottomRowDetail: () => 'Rora can remember this when the thread gets harsh.',

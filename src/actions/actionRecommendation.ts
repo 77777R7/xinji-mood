@@ -6,7 +6,12 @@ import type {
   TraceActionRoutingFeatures,
   ActionFeedbackSignal,
 } from '../trace/dataFoundation';
-import { getActionFeedbackSignal, getTraceIconPlainLabel } from '../trace/dataFoundation';
+import {
+  getActionFeedbackSignal,
+  getHelpfulnessMemoryScore,
+  getTraceIconPlainLabel,
+  isDeprioritizedHelpfulnessMemory,
+} from '../trace/dataFoundation';
 import {
   actionDefinitions,
   fallbackActionId,
@@ -33,6 +38,7 @@ type ActionEligibilityContext = {
   stage: ActionStageFit;
   safetyLevel: SafetyLevel;
   recentHelpfulness?: ActionFeedbackSignal | null;
+  deprioritizedActionIds?: ReadonlySet<string>;
 };
 
 const burdenRank: Record<ActionBurdenLevel, number> = {
@@ -71,9 +77,11 @@ export function getBestPositiveHelpfulnessMemoryForLoop(
     memories
       .filter((memory) => memory.chainKey === chainKey)
       .filter((memory) => memory.outcomeCounts.helped > 0 || memory.outcomeCounts.helped_a_little > 0)
+      .filter((memory) => !isDeprioritizedHelpfulnessMemory(memory))
+      .filter((memory) => getHelpfulnessMemoryScore(memory.outcomeCounts) > 0)
       .sort((left, right) => {
-        const leftScore = left.outcomeCounts.helped * 2 + left.outcomeCounts.helped_a_little;
-        const rightScore = right.outcomeCounts.helped * 2 + right.outcomeCounts.helped_a_little;
+        const leftScore = getHelpfulnessMemoryScore(left.outcomeCounts);
+        const rightScore = getHelpfulnessMemoryScore(right.outcomeCounts);
 
         if (rightScore !== leftScore) {
           return rightScore - leftScore;
@@ -110,9 +118,38 @@ function isEligibleAction(action: ActionDefinition, context: ActionEligibilityCo
 }
 
 function getEligibleActions(context: ActionEligibilityContext) {
+  const deprioritizedActionIds = context.deprioritizedActionIds;
+
   return actionDefinitions
     .filter((action) => isEligibleAction(action, context))
-    .sort((left, right) => burdenRank[left.burdenLevel] - burdenRank[right.burdenLevel]);
+    .sort((left, right) => {
+      if (deprioritizedActionIds) {
+        const leftDeprioritized = deprioritizedActionIds.has(left.id);
+        const rightDeprioritized = deprioritizedActionIds.has(right.id);
+
+        if (leftDeprioritized !== rightDeprioritized) {
+          return leftDeprioritized ? 1 : -1;
+        }
+      }
+
+      return burdenRank[left.burdenLevel] - burdenRank[right.burdenLevel];
+    });
+}
+
+export function getDeprioritizedActionIdsForLoop(
+  memories: HelpfulnessMemory[],
+  chainKey: string | null,
+): ReadonlySet<string> {
+  if (!chainKey) {
+    return new Set();
+  }
+
+  return new Set(
+    memories
+      .filter((memory) => memory.chainKey === chainKey)
+      .filter(isDeprioritizedHelpfulnessMemory)
+      .map((memory) => memory.actionId),
+  );
 }
 
 function pickActionFromRoutingFeatures({
@@ -121,18 +158,25 @@ function pickActionFromRoutingFeatures({
   safetyLevel,
   recentHelpfulness,
   allowedPrimaryNeeds,
+  deprioritizedActionIds,
 }: {
   routingFeatures: TraceActionRoutingFeatures | null;
   stage: ActionStageFit;
   safetyLevel: SafetyLevel;
   recentHelpfulness?: ActionFeedbackSignal | null;
   allowedPrimaryNeeds?: ActionPrimaryNeed[];
+  deprioritizedActionIds?: ReadonlySet<string>;
 }) {
   if (!routingFeatures) {
     return null;
   }
 
-  const eligibleActions = getEligibleActions({ stage, safetyLevel, recentHelpfulness });
+  const eligibleActions = getEligibleActions({
+    stage,
+    safetyLevel,
+    recentHelpfulness,
+    deprioritizedActionIds,
+  });
   const burdenLimit = burdenRank[routingFeatures.burdenLevel];
   const burdenEligibleActions = eligibleActions.filter(
     (action) => burdenRank[action.burdenLevel] <= burdenLimit,
@@ -192,15 +236,17 @@ function pickActionByNeed({
   safetyLevel,
   recentHelpfulness,
   fallbackId,
+  deprioritizedActionIds,
 }: {
   primaryNeed: ActionPrimaryNeed;
   stage: ActionStageFit;
   safetyLevel: SafetyLevel;
   recentHelpfulness?: ActionFeedbackSignal | null;
   fallbackId: ActionId;
+  deprioritizedActionIds?: ReadonlySet<string>;
 }) {
   return (
-    getEligibleActions({ stage, safetyLevel, recentHelpfulness }).find(
+    getEligibleActions({ stage, safetyLevel, recentHelpfulness, deprioritizedActionIds }).find(
       (action) => action.primaryNeed === primaryNeed,
     )?.id || fallbackId
   );
@@ -389,6 +435,7 @@ export function getRuleBasedRecommendedAction({
   }
 
   const loopStage = getLoopStage(traceRecord);
+  const deprioritizedActionIds = getDeprioritizedActionIdsForLoop(helpfulnessMemories, chainKey);
 
   if (traceRecord.loopSignature.occurrenceCount <= 3) {
     const routedActionId = pickActionFromRoutingFeatures({
@@ -396,12 +443,14 @@ export function getRuleBasedRecommendedAction({
       stage: loopStage,
       safetyLevel,
       allowedPrimaryNeeds: ['name_loop'],
+      deprioritizedActionIds,
     });
     const defaultActionId = pickActionByNeed({
       primaryNeed: 'name_loop',
       stage: loopStage,
       safetyLevel,
       fallbackId: 'name-loop',
+      deprioritizedActionIds,
     });
 
     return {
@@ -423,12 +472,14 @@ export function getRuleBasedRecommendedAction({
       stage: loopStage,
       safetyLevel,
       allowedPrimaryNeeds: ['downshift_body'],
+      deprioritizedActionIds,
     });
     const defaultActionId = pickActionByNeed({
       primaryNeed: 'downshift_body',
       stage: loopStage,
       safetyLevel,
       fallbackId: 'body-scan',
+      deprioritizedActionIds,
     });
 
     return {
@@ -450,12 +501,14 @@ export function getRuleBasedRecommendedAction({
       stage: loopStage,
       safetyLevel,
       allowedPrimaryNeeds: ['separate_thoughts'],
+      deprioritizedActionIds,
     });
     const defaultActionId = pickActionByNeed({
       primaryNeed: 'separate_thoughts',
       stage: loopStage,
       safetyLevel,
       fallbackId: 'fact-guess-worry-split',
+      deprioritizedActionIds,
     });
 
     return {
@@ -475,12 +528,14 @@ export function getRuleBasedRecommendedAction({
     routingFeatures,
     stage: loopStage,
     safetyLevel,
+    deprioritizedActionIds,
   });
   const defaultActionId = pickActionByNeed({
     primaryNeed: 'separate_thoughts',
     stage: loopStage,
     safetyLevel,
     fallbackId: fallbackActionId,
+    deprioritizedActionIds,
   });
 
   return {

@@ -1,0 +1,5 @@
+2026-07-06T20:??:??+08:00 | contract | Created active harness for tap-first ActionStep foundation. Scope excludes new action ids and major visual redesign.
+2026-07-06T20:??:??+08:00 | implementation | Patched action schema, six action definitions, action detail renderer, reward copy, docs, and contract tests for tap-first foundation.
+2026-07-06T20:??:??+08:00 | verification | Workspace `npm run test:contract` passed. Workspace `npm run typecheck` initially failed due stale `* 2.ts` / `* 3.ts` duplicate source files, then passed after removing those temp duplicates.
+2026-07-06T20:??:??+08:00 | verification | Workspace Expo export failed on corrupted `node_modules/minimatch`; synced changes into clean `/tmp/xinji-mood-fresh`, where typecheck, contract test, and Expo export passed.
+2026-07-06T20:??:??+08:00 | verification | Synced clean export to `tmp/web-8083`; `curl -I http://localhost:8083/` returned 200 and `node scripts/check_web_8083.mjs` passed.

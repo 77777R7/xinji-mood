@@ -1,3 +1,4 @@
+import { fetchMoodAi } from '../config/moodAiServer';
 import {
   assessMoodSafety,
   type MoodSafetyAssessment,
@@ -456,7 +457,7 @@ export async function runOpenAiTraceExtraction({
   audioMimeType = null,
   wantsVoiceReply = inputMode === 'speak',
 }: AiTraceExtractionRequest): Promise<AiTraceExtractionResponse> {
-  const response = await fetch('http://localhost:8084/api/mood-ai/reflect', {
+  const response = await fetchMoodAi('/api/mood-ai/reflect', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -485,7 +486,7 @@ export async function requestMoodPromptSpeech({
 }: {
   text: string;
 }): Promise<MoodAiSpeechResponse> {
-  const response = await fetch('http://localhost:8084/api/mood-ai/speak', {
+  const response = await fetchMoodAi('/api/mood-ai/speak', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -558,7 +559,7 @@ export async function runOpenAiWeeklyReflection({
   actionMemory: ActionMemoryEntry[];
   helpfulnessMemory: HelpfulnessMemory[];
 }): Promise<WeeklyReflectionPreview> {
-  const response = await fetch('http://localhost:8084/api/mood-ai/weekly-reflection', {
+  const response = await fetchMoodAi('/api/mood-ai/weekly-reflection', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

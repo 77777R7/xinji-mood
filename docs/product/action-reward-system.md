@@ -24,7 +24,7 @@ action completed
 | `named_it` | A repeating loop now has a gentle name. | Use for loop labeling. |
 | `noticed` | One next step became small enough to begin. | Use for behavioral nudges. |
 | `parked` | An unfinished thought has somewhere to wait. | Use for evening release. |
-| `kind_shift` | The user's self-talk moved toward a kinder sentence. | Use for self-compassion. |
+| `kind_shift` | The user's self-talk became a little less harsh while keeping the truth. | Use for self-compassion without forcing positivity. |
 
 ## Helpfulness Branches
 

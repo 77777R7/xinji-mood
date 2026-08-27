@@ -16,6 +16,13 @@ export type ActionId =
 export type ActionAnswerKey = string;
 export type ActionAnswers = Record<string, string>;
 
+export type ActionStepOption = {
+  id: string;
+  label: string;
+  value?: string;
+  followupPlaceholder?: string;
+};
+
 export type ActionFamily =
   | 'physiological'
   | 'cognitive'
@@ -82,7 +89,9 @@ export type ActionStep = {
   prompt: string;
   detailPrompt: string;
   placeholder: string;
-  inputKind: 'short_text' | 'long_text' | 'single_choice' | 'none';
+  inputKind: 'short_text' | 'long_text' | 'single_choice' | 'multi_choice' | 'none';
+  options?: ActionStepOption[];
+  allowOptionalNote?: boolean;
   optional: boolean;
   icon?: FeatherIconName;
   image?: ImageSourcePropType;
@@ -183,6 +192,56 @@ const actionAvoidWhen = {
   contraindicationSignalKeys: ['self_harm_language', 'crisis_language'],
 };
 
+const bodyLocationOptions: ActionStepOption[] = [
+  { id: 'chest', label: 'Chest' },
+  { id: 'stomach', label: 'Stomach' },
+  { id: 'shoulders', label: 'Shoulders' },
+  { id: 'head', label: 'Head' },
+  { id: 'whole_body', label: 'Whole body' },
+  { id: 'not_sure', label: 'Not sure' },
+];
+
+const softenOptions: ActionStepOption[] = [
+  { id: 'unclench_jaw', label: 'Unclench jaw' },
+  { id: 'drop_shoulders', label: 'Drop shoulders' },
+  { id: 'sit_back', label: 'Sit back' },
+  { id: 'sip_water', label: 'Sip water' },
+  { id: 'look_away', label: 'Look away' },
+  { id: 'one_exhale', label: 'One slow exhale' },
+];
+
+const tinyDirectionOptions: ActionStepOption[] = [
+  { id: 'ask', label: 'Ask' },
+  { id: 'write', label: 'Write' },
+  { id: 'rest', label: 'Rest' },
+  { id: 'prepare', label: 'Prepare' },
+  { id: 'pause', label: 'Pause' },
+  { id: 'clean_up', label: 'Clean up' },
+];
+
+const loopNicknameOptions: ActionStepOption[] = [
+  { id: 'feedback_echo', label: 'Feedback Echo' },
+  { id: 'too_many_guesses', label: 'Too Many Guesses' },
+  { id: 'body_alarm', label: 'Body Alarm' },
+  { id: 'replay_loop', label: 'Replay Loop' },
+];
+
+const earlyCueOptions: ActionStepOption[] = [
+  { id: 'chest_tightness', label: 'Chest tightness' },
+  { id: 'stomach_tightness', label: 'Stomach tightness' },
+  { id: 'head_pressure', label: 'Head pressure' },
+  { id: 'shoulders', label: 'Shoulders tense' },
+  { id: 'thought_replay', label: 'Thought replay' },
+  { id: 'not_sure', label: 'Not sure yet' },
+];
+
+const eveningParkingOptions: ActionStepOption[] = [
+  { id: 'tomorrow_notes', label: 'Tomorrow notes' },
+  { id: 'calendar', label: 'Calendar' },
+  { id: 'after_sleep', label: 'After sleep' },
+  { id: 'not_mine_tonight', label: 'Not mine tonight' },
+];
+
 export const actionDefinitions: ActionDefinition[] = [
   {
     schemaVersion: 'action_definition_v1',
@@ -211,9 +270,10 @@ export const actionDefinitions: ActionDefinition[] = [
         key: 'fact',
         title: 'Fact',
         prompt: 'What actually happened?',
-        detailPrompt: 'Write only the parts you know happened.',
+        detailPrompt: 'Write only the parts you know happened. Later, Rora can prefill this for you to confirm.',
         placeholder: 'Example: My manager asked one follow-up question.',
         inputKind: 'short_text',
+        allowOptionalNote: true,
         optional: false,
         image: actionAssets.stepFact,
         imageKey: 'stepFact',
@@ -222,9 +282,10 @@ export const actionDefinitions: ActionDefinition[] = [
         key: 'guess',
         title: 'Guess',
         prompt: 'What am I assuming?',
-        detailPrompt: 'Name the story your mind is filling in.',
+        detailPrompt: 'Name the story your mind is filling in. Keep it short; this is not a full journal entry.',
         placeholder: 'Example: I am assuming they think I did badly.',
         inputKind: 'short_text',
+        allowOptionalNote: true,
         optional: false,
         image: actionAssets.stepGuess,
         imageKey: 'stepGuess',
@@ -236,6 +297,7 @@ export const actionDefinitions: ActionDefinition[] = [
         detailPrompt: 'Put the fear down in one small sentence.',
         placeholder: 'Example: I am worried this will affect how they see me.',
         inputKind: 'short_text',
+        allowOptionalNote: true,
         optional: false,
         image: actionAssets.stepWorry,
         imageKey: 'stepWorry',
@@ -269,7 +331,7 @@ export const actionDefinitions: ActionDefinition[] = [
     tone: 'grounding',
     reason: 'Suggested because this trace has a stronger body signal.',
     reasonTemplate: 'Use when the body signal is the clearest early cue.',
-    description: 'A short check-in for noticing where the loop is living in your body before solving it.',
+    description: 'Notice the body cue before trying to solve the whole loop.',
     image: actionAssets.actionBodyScan,
     fits: {
       stages: ['daily_action', 'possible_loop', 'familiar_loop', 'lighter_step_after_too_much'],
@@ -284,9 +346,11 @@ export const actionDefinitions: ActionDefinition[] = [
         key: 'breathe',
         title: 'Breathe',
         prompt: 'Take two slower breaths.',
-        detailPrompt: 'Start by letting your body arrive before naming anything.',
+        detailPrompt: 'Tap done when you have taken two slower breaths.',
         placeholder: 'Optional: what changed after two breaths?',
-        inputKind: 'short_text',
+        inputKind: 'none',
+        options: [{ id: 'done', label: 'Done' }],
+        allowOptionalNote: true,
         optional: true,
         image: actionAssets.stepBreatheNoticeBody,
         imageKey: 'stepBreatheNoticeBody',
@@ -296,8 +360,10 @@ export const actionDefinitions: ActionDefinition[] = [
         title: 'Notice',
         prompt: 'Where is it strongest?',
         detailPrompt: 'Name the body signal without trying to fix it.',
-        placeholder: 'Example: tight chest, heavy stomach, tense shoulders.',
-        inputKind: 'short_text',
+        placeholder: 'Optional: add one word about the body cue.',
+        inputKind: 'single_choice',
+        options: bodyLocationOptions,
+        allowOptionalNote: true,
         optional: false,
         image: actionAssets.stepFact,
         imageKey: 'stepFact',
@@ -307,8 +373,10 @@ export const actionDefinitions: ActionDefinition[] = [
         title: 'Soften',
         prompt: 'What would feel 5% easier?',
         detailPrompt: 'Choose one tiny physical adjustment.',
-        placeholder: 'Example: unclench jaw, sit back, sip water.',
-        inputKind: 'short_text',
+        placeholder: 'Optional: add what changed.',
+        inputKind: 'single_choice',
+        options: softenOptions,
+        allowOptionalNote: true,
         optional: false,
         image: actionAssets.stepChooseOneSmallStep,
         imageKey: 'stepChooseOneSmallStep',
@@ -342,7 +410,7 @@ export const actionDefinitions: ActionDefinition[] = [
     tone: 'gentle',
     reason: 'This helps when a thread is just starting and needs a kind, ordinary name.',
     reasonTemplate: 'Use when a pattern is early, uncertain, or needs a lighter step.',
-    description: 'Give the pattern a gentle name so it becomes easier to notice next time.',
+    description: 'Give the pattern a small nickname so Rora can recognize it with you next time.',
     image: actionAssets.actionNameLoop,
     fits: {
       stages: ['daily_action', 'possible_thread', 'possible_loop', 'lighter_step_after_too_much'],
@@ -360,20 +428,29 @@ export const actionDefinitions: ActionDefinition[] = [
         key: 'notice',
         title: 'Notice',
         prompt: 'What keeps repeating?',
-        detailPrompt: 'Pick the smallest pattern you can name.',
-        placeholder: 'Example: replaying feedback after work.',
-        inputKind: 'short_text',
+        detailPrompt: 'Choose the piece that feels most familiar today.',
+        placeholder: 'Optional: add your own repeating piece.',
+        inputKind: 'single_choice',
+        options: [
+          { id: 'feedback_replay', label: 'Feedback replay' },
+          { id: 'too_many_guesses', label: 'Too many guesses' },
+          { id: 'body_signal_first', label: 'Body signal first' },
+          { id: 'self_blame', label: 'Self-blame' },
+        ],
+        allowOptionalNote: true,
         optional: false,
         image: actionAssets.stepNameIt,
         imageKey: 'stepNameIt',
       },
       {
         key: 'name_it',
-        title: 'Name it',
+        title: 'Nickname',
         prompt: 'What could you call this loop?',
-        detailPrompt: 'Use a kind, ordinary name.',
-        placeholder: 'Example: the replay loop.',
-        inputKind: 'short_text',
+        detailPrompt: 'Pick one Rora can remember lightly.',
+        placeholder: 'Optional: write your own nickname.',
+        inputKind: 'single_choice',
+        options: loopNicknameOptions,
+        allowOptionalNote: true,
         optional: false,
         image: actionAssets.actionNameLoop,
         imageKey: 'actionNameLoop',
@@ -382,9 +459,11 @@ export const actionDefinitions: ActionDefinition[] = [
         key: 'spot_early',
         title: 'Early sign',
         prompt: 'How might you spot it earlier?',
-        detailPrompt: 'Name one early body or thought signal.',
-        placeholder: 'Example: chest tightness after a message.',
-        inputKind: 'short_text',
+        detailPrompt: 'Choose one cue Rora should watch with you.',
+        placeholder: 'Optional: add your own early sign.',
+        inputKind: 'single_choice',
+        options: earlyCueOptions,
+        allowOptionalNote: true,
         optional: false,
         image: actionAssets.stepBreatheNoticeBody,
         imageKey: 'stepBreatheNoticeBody',
@@ -431,11 +510,13 @@ export const actionDefinitions: ActionDefinition[] = [
     steps: [
       {
         key: 'want',
-        title: 'Want',
-        prompt: 'What would help a little?',
-        detailPrompt: 'Name the direction, not the whole plan.',
-        placeholder: 'Example: ask one clarifying question.',
-        inputKind: 'short_text',
+        title: 'Direction',
+        prompt: 'What direction would help a little?',
+        detailPrompt: 'Choose the direction, not the whole plan.',
+        placeholder: 'Optional: add your own direction.',
+        inputKind: 'single_choice',
+        options: tinyDirectionOptions,
+        allowOptionalNote: true,
         optional: false,
         image: actionAssets.stepChooseOneSmallStep,
         imageKey: 'stepChooseOneSmallStep',
@@ -447,17 +528,19 @@ export const actionDefinitions: ActionDefinition[] = [
         detailPrompt: 'Shrink it until it feels almost too small.',
         placeholder: 'Example: write the first sentence.',
         inputKind: 'short_text',
+        allowOptionalNote: true,
         optional: false,
         image: actionAssets.stepFact,
         imageKey: 'stepFact',
       },
       {
-        key: 'when',
-        title: 'When',
-        prompt: 'When could you do it?',
-        detailPrompt: 'Pick a nearby moment.',
-        placeholder: 'Example: after lunch, before opening Slack.',
+        key: 'first_30_seconds',
+        title: 'First 30 seconds',
+        prompt: 'What is the first 30-second version?',
+        detailPrompt: 'Make the start smaller than you think.',
+        placeholder: 'Example: open the draft and write one line.',
         inputKind: 'short_text',
+        allowOptionalNote: true,
         optional: false,
         image: actionAssets.stepNameIt,
         imageKey: 'stepNameIt',
@@ -491,7 +574,7 @@ export const actionDefinitions: ActionDefinition[] = [
     tone: 'reflective',
     reason: 'This helps when a thread needs somewhere to wait before sleep.',
     reasonTemplate: 'Use when unfinished thoughts need to be parked before rest.',
-    description: 'Move the unfinished parts of the day out of your head and onto a small list.',
+    description: 'Close one mental tab so the unfinished thought has somewhere to wait tonight.',
     image: actionAssets.actionEveningUnload,
     fits: {
       stages: ['daily_action', 'familiar_loop'],
@@ -506,9 +589,16 @@ export const actionDefinitions: ActionDefinition[] = [
         key: 'unfinished',
         title: 'Unfinished',
         prompt: 'What is still open?',
-        detailPrompt: 'List the thought that keeps returning.',
-        placeholder: 'Example: tomorrow’s meeting.',
-        inputKind: 'short_text',
+        detailPrompt: 'Choose the kind of open tab. You can add words only if you want.',
+        placeholder: 'Optional: name the open tab.',
+        inputKind: 'single_choice',
+        options: [
+          { id: 'work_tab', label: 'Work tab' },
+          { id: 'message_tab', label: 'Message tab' },
+          { id: 'decision_tab', label: 'Decision tab' },
+          { id: 'tomorrow_tab', label: 'Tomorrow tab' },
+        ],
+        allowOptionalNote: true,
         optional: false,
         image: actionAssets.stepFact,
         imageKey: 'stepFact',
@@ -518,8 +608,10 @@ export const actionDefinitions: ActionDefinition[] = [
         title: 'Park it',
         prompt: 'Where can it wait?',
         detailPrompt: 'Choose a place or time to return to it.',
-        placeholder: 'Example: notes app tomorrow morning.',
-        inputKind: 'short_text',
+        placeholder: 'Optional: add the exact place.',
+        inputKind: 'single_choice',
+        options: eveningParkingOptions,
+        allowOptionalNote: true,
         optional: false,
         image: actionAssets.actionEveningUnload,
         imageKey: 'actionEveningUnload',
@@ -528,9 +620,16 @@ export const actionDefinitions: ActionDefinition[] = [
         key: 'enough',
         title: 'Enough',
         prompt: 'What is enough for tonight?',
-        detailPrompt: 'Give your mind a stopping line.',
-        placeholder: 'Example: I wrote it down. I can stop for now.',
-        inputKind: 'short_text',
+        detailPrompt: 'Pick a stopping line for tonight.',
+        placeholder: 'Optional: write your own stopping line.',
+        inputKind: 'single_choice',
+        options: [
+          { id: 'i_wrote_it_down', label: 'I wrote it down.' },
+          { id: 'tomorrow_can_hold_it', label: 'Tomorrow can hold it.' },
+          { id: 'enough_for_tonight', label: 'Enough for tonight.' },
+          { id: 'not_solving_now', label: 'Not solving this now.' },
+        ],
+        allowOptionalNote: true,
         optional: false,
         image: actionAssets.stepBreatheNoticeBody,
         imageKey: 'stepBreatheNoticeBody',
@@ -555,16 +654,16 @@ export const actionDefinitions: ActionDefinition[] = [
   {
     schemaVersion: 'action_definition_v1',
     id: 'kind-reframe',
-    title: 'Kind Reframe',
-    shortTitle: 'Kind Reframe',
+    title: 'Say It Less Harshly',
+    shortTitle: 'Less Harsh Line',
     estimatedMinutes: 2,
     family: 'self_compassion',
     primaryNeed: 'reframe',
     burdenLevel: 'low',
     tone: 'kind',
     reason: 'This helps when the thread includes a harsher story about yourself.',
-    reasonTemplate: 'Use when self-blame needs a kinder sentence that is still honest.',
-    description: 'Try a softer sentence that is still honest.',
+    reasonTemplate: 'Use when self-blame needs a less harsh sentence that is still honest.',
+    description: 'Keep the truth, but take out the attack.',
     image: actionAssets.actionKindReframe,
     fits: {
       stages: ['daily_action', 'possible_loop', 'familiar_loop'],
@@ -579,9 +678,16 @@ export const actionDefinitions: ActionDefinition[] = [
         key: 'harsh_line',
         title: 'Harsh line',
         prompt: 'What did your mind say?',
-        detailPrompt: 'Write the self-critical line as-is.',
-        placeholder: 'Example: I always mess this up.',
-        inputKind: 'short_text',
+        detailPrompt: 'Pick the shape of the self-critical line, or add your own.',
+        placeholder: 'Optional: write the line as-is.',
+        inputKind: 'single_choice',
+        options: [
+          { id: 'i_messed_up', label: 'I messed up.' },
+          { id: 'i_should_know', label: 'I should know better.' },
+          { id: 'they_are_upset', label: 'They are upset with me.' },
+          { id: 'i_am_behind', label: 'I am behind.' },
+        ],
+        allowOptionalNote: true,
         optional: false,
         image: actionAssets.stepWorry,
         imageKey: 'stepWorry',
@@ -591,19 +697,33 @@ export const actionDefinitions: ActionDefinition[] = [
         title: 'True part',
         prompt: 'What part is actually true?',
         detailPrompt: 'Keep the truth, drop the punishment.',
-        placeholder: 'Example: I felt unsure in that moment.',
-        inputKind: 'short_text',
+        placeholder: 'Optional: add the true part.',
+        inputKind: 'single_choice',
+        options: [
+          { id: 'i_felt_unsure', label: 'I felt unsure.' },
+          { id: 'i_need_clarity', label: 'I need clarity.' },
+          { id: 'i_missed_a_piece', label: 'I missed a piece.' },
+          { id: 'i_am_learning', label: 'I am learning.' },
+        ],
+        allowOptionalNote: true,
         optional: false,
         image: actionAssets.stepFact,
         imageKey: 'stepFact',
       },
       {
-        key: 'kind_line',
-        title: 'Kind line',
-        prompt: 'What is a kinder version?',
-        detailPrompt: 'Make it something you could say to a friend.',
-        placeholder: 'Example: I can learn from this without attacking myself.',
-        inputKind: 'short_text',
+        key: 'less_harsh_line',
+        title: 'Less harsh line',
+        prompt: 'How can you say the true part without attacking yourself?',
+        detailPrompt: 'Choose a line that feels believable, not falsely positive.',
+        placeholder: 'Optional: write your own less harsh line.',
+        inputKind: 'single_choice',
+        options: [
+          { id: 'can_learn', label: 'I can learn from this.' },
+          { id: 'need_one_clarifier', label: 'I need one clarifier.' },
+          { id: 'not_all_on_me', label: 'This is not all on me.' },
+          { id: 'one_next_step', label: 'One next step is enough.' },
+        ],
+        allowOptionalNote: true,
         optional: false,
         image: actionAssets.actionKindReframe,
         imageKey: 'actionKindReframe',
